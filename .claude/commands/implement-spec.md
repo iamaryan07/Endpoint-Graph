@@ -32,7 +32,29 @@ If the output is NOT empty (any staged, unstaged, or untracked files exist):
 - Tell the user: "You have uncommitted changes. Commit or stash them before implementing. Run `git status` to review."
 - Do not proceed
 
-If the output IS empty (clean working tree): continue to Step 1.
+If the output IS empty (clean working tree): continue to Check 3.
+
+### Check 3 — Create and checkout a feature branch
+
+Derive the branch name from the spec filename:
+- Take the spec filename without the .md extension
+- Add the prefix `feat/`
+- Example: `03-repo-cloner.md` → `feat/03-repo-cloner`
+- Example: `09-frontend-graph.md` → `feat/09-frontend-graph`
+
+Run:
+```
+git checkout -b feat/NN-specname
+```
+
+If the branch already exists (checkout fails):
+- Stop
+- Tell the user: "Branch `feat/NN-specname` already exists. Either delete it with `git branch -D feat/NN-specname` and re-run, or switch to it manually with `git checkout feat/NN-specname` if you want to continue previous work."
+- Do not proceed
+
+If the branch is created and checked out successfully: continue to Step 1.
+
+All implementation in the following steps happens on this branch, not on main.
 
 ---
 
@@ -150,7 +172,11 @@ When implementation is complete, tell the user:
 5. Reading order — the order in which the user should read the changed
    files to understand what was built, with one line per file explaining
    what to look for when reading it
-6. What to run next: "Run `/test-feature` to verify."
+6. Which branch the work is on
+7. What to run next — in this exact order:
+   - Run `/test-feature .claude/specs/NN-specname.md`
+   - Run `/code-review .claude/specs/NN-specname.md`
+   - If both pass: merge to main and delete the branch
 
 #### Reading order rules
 
@@ -217,6 +243,9 @@ main  ✓
 
 $ git status --porcelain
         ✓  (empty — clean working tree)
+
+$ git checkout -b feat/03-repo-cloner
+Switched to a new branch 'feat/03-repo-cloner'  ✓
 ```
 
 Claude reads `.claude/CLAUDE.md` → reads `.claude/specs/03-repo-cloner.md`
@@ -274,4 +303,10 @@ Reading order:
      were deliberately handled.
 
 Run /test-feature .claude/specs/03-repo-cloner.md to verify.
+
+You are on branch feat/03-repo-cloner.
+After /test-feature and /code-review pass, merge to main:
+  git checkout main
+  git merge feat/03-repo-cloner
+  git branch -d feat/03-repo-cloner
 ```
