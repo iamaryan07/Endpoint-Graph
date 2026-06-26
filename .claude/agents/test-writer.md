@@ -54,28 +54,53 @@ Understand:
 
 ### Step 4 — Plan the tests
 
-Before writing anything, plan all tests across these categories:
+Do NOT look at the spec's "Test cases" section yet. That comes in Step 7.
+First, derive tests independently by reading the implemented code.
+
+For every function and route in the implemented files, ask:
+- What inputs does it accept?
+- What does it return on success?
+- What does it raise or return on failure?
+- What are the boundary conditions?
+- What external things does it call (DB, subprocess, file system, API)?
+
+Then plan tests across all four categories:
 
 #### Happy path
 The normal flow — correct inputs, expected outputs.
-Every function must have at least one happy path test.
+Every single function must have at least one happy path test.
+No exceptions. If a function exists, it gets a happy path test.
 
 #### Edge cases
-Empty inputs, zero results, boundary values.
-- Empty list returned instead of error
-- Empty string inputs
-- File with no HTTP calls
-- Repo with no openapi.yaml
-- Endpoint with no consumers
+Boundary conditions and empty states.
+Derive these from the code itself — look for:
+- Any `if len(...) == 0` → test the empty case
+- Any `if result is None` → test the None case
+- Any loop over a list → test with empty list
+- Any string operation → test with empty string
+- Any file read → test with file that has no relevant content
+
+Common edge cases for this project:
+- Service folder with no openapi.yaml and no .py files
+- Python file that has no HTTP calls
+- Python file that has no route decorators
+- Endpoint with zero consumers
+- Graph with no edges (only isolated service nodes)
+- repo_url with trailing slash or extra spaces
 
 #### Error cases
-Bad inputs, failures, exceptions.
-- Invalid GitHub URL format
-- Bad GitHub token (clone fails)
-- File that cannot be parsed by tree-sitter (syntax error)
+Bad inputs and failure modes.
+Derive these from the code — look for every raise, every if not,
+every try/except, every validation check. Each one maps to a test.
+
+Common error cases for this project:
+- Invalid GitHub URL format (missing github.com/, extra path segments)
+- Bad GitHub token (subprocess returns non-zero exit code)
+- File that cannot be parsed by tree-sitter (malformed Python syntax)
 - DB connection failure
 - Missing required field in request body
-- Endpoint ID that does not exist
+- Endpoint ID that does not exist in DB
+- repo_url that is an empty string
 
 #### Integration (backend only, where applicable)
 Tests that exercise multiple functions together.
@@ -270,13 +295,23 @@ it('renders consumers from API response', async () => {
 
 ### Step 7 — Cross-check against spec test cases
 
-Read the "Test cases" section of the spec again.
+Now read the "Test cases" section of the spec for the first time.
 
-Verify every test case listed in the spec has a corresponding written test.
+This is a secondary check — not the primary source of tests.
+The tests written in Step 5 and 6 came from reading the code.
+Now verify the spec's list is also covered.
 
-If any spec test case is not covered, write it now.
+For each test case listed in the spec:
+- If a written test already covers it → mark it covered
+- If nothing covers it → write it now, even if it seems redundant
 
-List any test cases written that go beyond the spec — label them as "extra coverage".
+For each test written from the code that is NOT in the spec:
+- Keep it — code-derived tests are more thorough than spec-listed ones
+- Label them "additional coverage" in the Step 8 report
+
+The spec's test cases are a minimum floor, not a ceiling.
+If the code has more behaviour than the spec's test list covers,
+that extra behaviour gets tested anyway.
 
 ### Step 8 — Report to /test-feature
 
@@ -294,7 +329,8 @@ Tests by category:
   Integration: N
 
 Spec test cases covered: N/N
-Extra coverage added: N tests (list them)
+Additional coverage from code analysis: N tests (list them)
+  — these came from reading the implementation, not the spec
 
 Mocks used:
   - asyncpg pool (backend)

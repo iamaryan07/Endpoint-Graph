@@ -16,6 +16,7 @@ The FastAPI app lives in `backend/`. It connects to Supabase PostgreSQL via asyn
 
 ## Files to create
 
+- `backend/migrations/001_initial_schema.sql` — versioned DDL for all three tables; apply with Supabase MCP or `supabase db push`
 - `backend/main.py` — FastAPI app entry point: lifespan, router registration, CORS, health route
 - `backend/database.py` — asyncpg connection pool (singleton, created once on startup)
 - `backend/models.py` — all Pydantic request/response models for the entire API
@@ -239,41 +240,13 @@ __pycache__/
 
 ---
 
-### Supabase SQL — three tables
+### backend/migrations/001_initial_schema.sql
 
-Run this SQL in the Supabase SQL Editor (Dashboard → SQL Editor → New query). Execute each `CREATE TABLE` statement separately or all at once. The `auth.users` table is managed by Supabase — do not touch it.
+DDL lives here — do not paste SQL manually into the Supabase SQL Editor. Apply via:
+- **Supabase MCP:** `apply_migration` with `name=initial_schema`
+- **Supabase CLI:** `supabase db push`
 
-```sql
-CREATE TABLE public.services (
-  id          SERIAL PRIMARY KEY,
-  name        VARCHAR(100) NOT NULL,
-  language    VARCHAR(50),
-  repo_url    VARCHAR(255),
-  created_at  TIMESTAMP DEFAULT NOW()
-);
-
-CREATE TABLE public.endpoints (
-  id           SERIAL PRIMARY KEY,
-  service_id   INT NOT NULL REFERENCES public.services(id) ON DELETE CASCADE,
-  method       VARCHAR(10) NOT NULL,
-  path         VARCHAR(255) NOT NULL,
-  spec_source  VARCHAR(50),
-  created_at   TIMESTAMP DEFAULT NOW()
-);
-
-CREATE TABLE public.consumer_edges (
-  id                 SERIAL PRIMARY KEY,
-  caller_service_id  INT NOT NULL REFERENCES public.services(id) ON DELETE CASCADE,
-  endpoint_id        INT NOT NULL REFERENCES public.endpoints(id) ON DELETE CASCADE,
-  last_seen_at       TIMESTAMP DEFAULT NOW(),
-  call_count         INT DEFAULT 0,
-  source             VARCHAR(20) NOT NULL,
-  created_at         TIMESTAMP DEFAULT NOW(),
-  UNIQUE(caller_service_id, endpoint_id)
-);
-```
-
-After running, verify in the Supabase Table Editor that all three tables appear under the `public` schema.
+The `auth.users` table is managed by Supabase Auth — do not include it here.
 
 ---
 
@@ -376,7 +349,8 @@ async def test_get_github_token_empty_string():
 
 ## Done when
 
-- [ ] All three tables exist in Supabase (`services`, `endpoints`, `consumer_edges`) — verified in Table Editor
+- [ ] `backend/migrations/001_initial_schema.sql` exists with all three CREATE TABLE statements
+- [ ] All three tables exist in Supabase (`services`, `endpoints`, `consumer_edges`) — verified via `list_tables` or Table Editor
 - [ ] `backend/main.py` exists with lifespan, CORS (no `allow_credentials`), and `GET /health`
 - [ ] `backend/database.py` exists with `get_pool()`
 - [ ] `backend/models.py` exists with all models listed above
