@@ -1,4 +1,5 @@
 import pytest
+from datetime import datetime, timezone
 from unittest.mock import patch, AsyncMock, MagicMock
 from contextlib import asynccontextmanager
 from httpx import AsyncClient, ASGITransport
@@ -361,3 +362,208 @@ def test_extract_path_helper():
     assert _extract_path("") is None
     # urlparse("http://svc").path == "" which is falsy → returns None
     assert _extract_path("http://svc") is None
+
+
+# ---------------------------------------------------------------------------
+# GET /services
+# ---------------------------------------------------------------------------
+
+async def test_get_services_returns_list():
+    rows = [
+        _Row({"id": 1, "name": "order-service", "language": "python", "repo_url": "github.com/x/y"}),
+        _Row({"id": 2, "name": "user-service", "language": None, "repo_url": None}),
+    ]
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(return_value=rows)
+    pool = _make_pool(conn)
+
+    with patch("routers.services.get_pool", new_callable=AsyncMock) as mock_gp:
+        mock_gp.return_value = pool
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get("/services", headers=HEADERS)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 2
+    assert data[0]["name"] == "order-service"
+
+
+async def test_get_services_empty():
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(return_value=[])
+    pool = _make_pool(conn)
+
+    with patch("routers.services.get_pool", new_callable=AsyncMock) as mock_gp:
+        mock_gp.return_value = pool
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get("/services", headers=HEADERS)
+
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+async def test_get_services_requires_token():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/services")
+
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# GET /endpoints
+# ---------------------------------------------------------------------------
+
+async def test_get_endpoints_returns_all():
+    rows = [
+        _Row({"id": 1, "service_id": 1, "method": "GET", "path": "/users/{id}", "spec_source": "openapi"}),
+        _Row({"id": 2, "service_id": 2, "method": "POST", "path": "/orders/create", "spec_source": "decorator"}),
+    ]
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(return_value=rows)
+    pool = _make_pool(conn)
+
+    with patch("routers.endpoints.get_pool", new_callable=AsyncMock) as mock_gp:
+        mock_gp.return_value = pool
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get("/endpoints", headers=HEADERS)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 2
+    assert data[0]["path"] == "/users/{id}"
+    assert data[0]["service_id"] == 1
+
+
+async def test_get_endpoints_filters_by_service_id():
+    rows = [
+        _Row({"id": 1, "service_id": 1, "method": "GET", "path": "/users/{id}", "spec_source": "openapi"}),
+    ]
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(return_value=rows)
+    pool = _make_pool(conn)
+
+    with patch("routers.endpoints.get_pool", new_callable=AsyncMock) as mock_gp:
+        mock_gp.return_value = pool
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get("/endpoints?service_id=1", headers=HEADERS)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 1
+    assert data[0]["service_id"] == 1
+    assert data[0]["path"] == "/users/{id}"
+
+
+async def test_get_endpoints_requires_token():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/endpoints")
+
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# GET /endpoints/{id}/impact-analysis
+# ---------------------------------------------------------------------------
+
+async def test_get_impact_analysis_returns_consumers():
+    rows = [
+        _Row({"service_name": "order-service", "call_count": 5,
+              "last_seen_at": datetime(2024, 1, 1, tzinfo=timezone.utc), "source": "static"}),
+        _Row({"service_name": "payment-service", "call_count": 2,
+              "last_seen_at": datetime(2024, 1, 2, tzinfo=timezone.utc), "source": "static"}),
+    ]
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(return_value=rows)
+    pool = _make_pool(conn)
+
+    with patch("routers.endpoints.get_pool", new_callable=AsyncMock) as mock_gp:
+        mock_gp.return_value = pool
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get("/endpoints/1/impact-analysis", headers=HEADERS)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) == 2
+    assert data[0]["service_name"] == "order-service"
+    assert data[0]["call_count"] == 5
+
+
+async def test_get_impact_analysis_empty():
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(return_value=[])
+    pool = _make_pool(conn)
+
+    with patch("routers.endpoints.get_pool", new_callable=AsyncMock) as mock_gp:
+        mock_gp.return_value = pool
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get("/endpoints/99/impact-analysis", headers=HEADERS)
+
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
+async def test_get_impact_analysis_requires_token():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/endpoints/1/impact-analysis")
+
+    assert resp.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# GET /graph
+# ---------------------------------------------------------------------------
+
+async def test_get_graph_returns_nodes_and_edges():
+    service_rows = [
+        _Row({"id": 1, "name": "order-service"}),
+        _Row({"id": 2, "name": "user-service"}),
+    ]
+    edge_rows = [
+        _Row({
+            "caller_service_id": 1,
+            "provider_service_id": 2,
+            "endpoint_path": "/users/{id}",
+            "endpoint_method": "GET",
+            "call_count": 10,
+            "last_seen_at": datetime(2024, 1, 1, tzinfo=timezone.utc),
+        }),
+    ]
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(side_effect=[service_rows, edge_rows])
+    pool = _make_pool(conn)
+
+    with patch("routers.graph.get_pool", new_callable=AsyncMock) as mock_gp:
+        mock_gp.return_value = pool
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get("/graph", headers=HEADERS)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data["nodes"]) == 2
+    assert data["nodes"][0] == {"id": "1", "name": "order-service"}
+    assert len(data["edges"]) == 1
+    assert data["edges"][0]["source"] == "1"
+    assert data["edges"][0]["target"] == "2"
+
+
+async def test_get_graph_empty_db():
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(side_effect=[[], []])
+    pool = _make_pool(conn)
+
+    with patch("routers.graph.get_pool", new_callable=AsyncMock) as mock_gp:
+        mock_gp.return_value = pool
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get("/graph", headers=HEADERS)
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["nodes"] == []
+    assert data["edges"] == []
+
+
+async def test_get_graph_requires_token():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/graph")
+
+    assert resp.status_code == 422
