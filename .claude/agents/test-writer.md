@@ -36,11 +36,14 @@ Extract what is relevant to testing:
 
 ### Step 2 — Read the spec file
 
-Read the spec fully. Extract:
-- Every test case listed under "Test cases"
+Read the spec for context only. Extract:
+- The goal — what this spec delivers (so tests verify the right thing)
 - Every function signature in "Implementation details"
-- Every error case described
-- The "Done when" checklist (tests are part of this)
+- Every error case described in the implementation details
+
+Do NOT read or use the "Test cases" section of the spec.
+That section is irrelevant to this agent.
+All test cases are derived from the implemented code in Step 4.
 
 ### Step 3 — Read the implemented files
 
@@ -293,25 +296,19 @@ it('renders consumers from API response', async () => {
 })
 ```
 
-### Step 7 — Cross-check against spec test cases
+### Step 7 — Self-review the written tests
 
-Now read the "Test cases" section of the spec for the first time.
+Read every test just written and verify each one:
 
-This is a secondary check — not the primary source of tests.
-The tests written in Step 5 and 6 came from reading the code.
-Now verify the spec's list is also covered.
+- Does it test exactly one thing? If not, split it.
+- Does it have a meaningful assertion? `assert True` or `assert result is not None`
+  alone is not a meaningful assertion — assert the actual value.
+- Is the test name clear enough that a failure message alone tells you what broke?
+- Is every external dependency mocked? No real DB, no real GitHub, no real filesystem.
+- Would this test catch a bug if the implementation was subtly wrong?
+  If deleting the function body would still make the test pass, the test is wrong.
 
-For each test case listed in the spec:
-- If a written test already covers it → mark it covered
-- If nothing covers it → write it now, even if it seems redundant
-
-For each test written from the code that is NOT in the spec:
-- Keep it — code-derived tests are more thorough than spec-listed ones
-- Label them "additional coverage" in the Step 8 report
-
-The spec's test cases are a minimum floor, not a ceiling.
-If the code has more behaviour than the spec's test list covers,
-that extra behaviour gets tested anyway.
+Fix any test that fails this review before moving to Step 8.
 
 ### Step 8 — Report to /test-feature
 
@@ -328,9 +325,7 @@ Tests by category:
   Error cases: N
   Integration: N
 
-Spec test cases covered: N/N
-Additional coverage from code analysis: N tests (list them)
-  — these came from reading the implementation, not the spec
+All tests derived from: code analysis (not spec test list)
 
 Mocks used:
   - asyncpg pool (backend)
@@ -354,3 +349,6 @@ Ready for test-runner.
 - Do not mock the function being tested — only mock its dependencies
 - Do not write one giant test function that tests multiple things
 - Do not leave any test case from the spec unwritten
+- Do not read the spec's "Test cases" section — derive all tests from the code
+- Do not write a test just because the spec listed it — only write tests that
+  exercise real behaviour found in the implemented code
