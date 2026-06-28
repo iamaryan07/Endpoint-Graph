@@ -28,17 +28,21 @@ export default function GraphPage() {
     setGraphError(null)
     try {
       const graphData = await fetchGraph()
-      const rfNodes = graphData.nodes.map((node) => {
-        const isEndpoint = node.id.startsWith('endpoint-')
-        return {
+      const serviceNodes = graphData.nodes.filter((n) => !n.id.startsWith('endpoint-'))
+      const endpointNodes = graphData.nodes.filter((n) => n.id.startsWith('endpoint-'))
+      const rfNodes = [
+        ...serviceNodes.map((node, i) => ({
           id: node.id,
           data: { label: node.name },
-          position: { x: 0, y: 0 },
-          ...(isEndpoint
-            ? { style: { background: '#e0f2fe', borderColor: '#0284c7', borderWidth: 2 } }
-            : {}),
-        }
-      })
+          position: { x: i * 220, y: 0 },
+        })),
+        ...endpointNodes.map((node, i) => ({
+          id: node.id,
+          data: { label: node.name },
+          position: { x: i * 220, y: 200 },
+          style: { background: '#e0f2fe', borderColor: '#0284c7', borderWidth: 2 },
+        })),
+      ]
       const rfEdges = graphData.edges.map((edge) => ({
         id: `${edge.source}-${edge.target}-${edge.endpoint_method}-${edge.endpoint_path}`,
         source: edge.source,

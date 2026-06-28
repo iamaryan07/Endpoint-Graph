@@ -15,11 +15,16 @@ def clone_repo(repo_url: str, github_token: str) -> str:
     auth_url = f"https://{github_token}@{repo_url}"
     tmp_dir = os.path.join(tempfile.gettempdir(), str(uuid.uuid4()))
 
-    result = subprocess.run(
-        ["git", "clone", "--depth", "1", auth_url, tmp_dir],
-        capture_output=True,
-        text=True
-    )
+    try:
+        result = subprocess.run(
+            ["git", "clone", "--depth", "1", auth_url, tmp_dir],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise RuntimeError("Clone timed out after 60 seconds")
 
     if result.returncode != 0:
         raise RuntimeError(f"Clone failed: {result.stderr}")

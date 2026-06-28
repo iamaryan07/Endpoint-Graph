@@ -6,6 +6,18 @@ async function getGitHubToken() {
   return session.provider_token
 }
 
+async function extractError(res) {
+  const text = await res.text()
+  try {
+    const json = JSON.parse(text)
+    if (typeof json.detail === 'string') return json.detail
+    if (Array.isArray(json.detail)) return json.detail.map((e) => e.msg ?? String(e)).join(', ')
+    return text
+  } catch {
+    return text
+  }
+}
+
 export async function triggerAnalysis(repoUrl) {
   const token = await getGitHubToken()
   const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/analyze`, {
@@ -16,7 +28,7 @@ export async function triggerAnalysis(repoUrl) {
     },
     body: JSON.stringify({ repo_url: repoUrl }),
   })
-  if (!res.ok) throw new Error(await res.text())
+  if (!res.ok) throw new Error(await extractError(res))
   return res.json()
 }
 
@@ -25,7 +37,7 @@ export async function fetchGraph() {
   const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/graph`, {
     headers: { 'X-GitHub-Token': token },
   })
-  if (!res.ok) throw new Error(await res.text())
+  if (!res.ok) throw new Error(await extractError(res))
   return res.json()
 }
 
@@ -34,7 +46,7 @@ export async function fetchServices() {
   const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/services`, {
     headers: { 'X-GitHub-Token': token },
   })
-  if (!res.ok) throw new Error(await res.text())
+  if (!res.ok) throw new Error(await extractError(res))
   return res.json()
 }
 
@@ -44,6 +56,6 @@ export async function fetchImpactAnalysis(endpointId) {
     `${process.env.NEXT_PUBLIC_API_URL}/endpoints/${endpointId}/impact-analysis`,
     { headers: { 'X-GitHub-Token': token } }
   )
-  if (!res.ok) throw new Error(await res.text())
+  if (!res.ok) throw new Error(await extractError(res))
   return res.json()
 }

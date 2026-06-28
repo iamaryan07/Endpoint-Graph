@@ -14,5 +14,6 @@ async def get_pool() -> asyncpg.Pool:
             os.getenv("DATABASE_URL"),
             min_size=2,
             max_size=10,
+            statement_cache_size=0,
         )
     return _pool
