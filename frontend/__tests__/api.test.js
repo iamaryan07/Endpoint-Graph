@@ -84,3 +84,12 @@ test('test_fetch_impact_analysis_sends_correct_request', async () => {
     })
   )
 })
+
+test('test_fetch_impact_analysis_throws_on_non_ok_response', async () => {
+  global.fetch = jest.fn().mockResolvedValue({
+    ok: false,
+    text: jest.fn().mockResolvedValue('Not Found'),
+  })
+
+  await expect(fetchImpactAnalysis(99)).rejects.toThrow('Not Found')
+})

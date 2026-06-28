@@ -518,10 +518,13 @@ async def test_get_graph_returns_nodes_and_edges():
         _Row({"id": 1, "name": "order-service"}),
         _Row({"id": 2, "name": "user-service"}),
     ]
+    endpoint_rows = [
+        _Row({"id": 5, "method": "GET", "path": "/users/{id}"}),
+    ]
     edge_rows = [
         _Row({
             "caller_service_id": 1,
-            "provider_service_id": 2,
+            "endpoint_id": 5,
             "endpoint_path": "/users/{id}",
             "endpoint_method": "GET",
             "call_count": 10,
@@ -529,7 +532,7 @@ async def test_get_graph_returns_nodes_and_edges():
         }),
     ]
     conn = AsyncMock()
-    conn.fetch = AsyncMock(side_effect=[service_rows, edge_rows])
+    conn.fetch = AsyncMock(side_effect=[service_rows, endpoint_rows, edge_rows])
     pool = _make_pool(conn)
 
     with patch("routers.graph.get_pool", new_callable=AsyncMock) as mock_gp:
@@ -539,16 +542,18 @@ async def test_get_graph_returns_nodes_and_edges():
 
     assert resp.status_code == 200
     data = resp.json()
-    assert len(data["nodes"]) == 2
-    assert data["nodes"][0] == {"id": "1", "name": "order-service"}
+    # 2 service nodes + 1 endpoint node
+    assert len(data["nodes"]) == 3
+    assert {"id": "1", "name": "order-service"} in data["nodes"]
+    assert {"id": "endpoint-5", "name": "GET /users/{id}"} in data["nodes"]
     assert len(data["edges"]) == 1
     assert data["edges"][0]["source"] == "1"
-    assert data["edges"][0]["target"] == "2"
+    assert data["edges"][0]["target"] == "endpoint-5"
 
 
 async def test_get_graph_empty_db():
     conn = AsyncMock()
-    conn.fetch = AsyncMock(side_effect=[[], []])
+    conn.fetch = AsyncMock(side_effect=[[], [], []])
     pool = _make_pool(conn)
 
     with patch("routers.graph.get_pool", new_callable=AsyncMock) as mock_gp:
@@ -567,3 +572,34 @@ async def test_get_graph_requires_token():
         resp = await client.get("/graph")
 
     assert resp.status_code == 422
+
+
+async def test_get_graph_includes_endpoint_nodes():
+    service_rows = [_Row({"id": 3, "name": "payment-service"})]
+    endpoint_rows = [_Row({"id": 7, "method": "POST", "path": "/payments/charge"})]
+    edge_rows = [
+        _Row({
+            "caller_service_id": 3,
+            "endpoint_id": 7,
+            "endpoint_path": "/payments/charge",
+            "endpoint_method": "POST",
+            "call_count": 4,
+            "last_seen_at": datetime(2024, 6, 1, tzinfo=timezone.utc),
+        }),
+    ]
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(side_effect=[service_rows, endpoint_rows, edge_rows])
+    pool = _make_pool(conn)
+
+    with patch("routers.graph.get_pool", new_callable=AsyncMock) as mock_gp:
+        mock_gp.return_value = pool
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get("/graph", headers=HEADERS)
+
+    data = resp.json()
+    node_ids = [n["id"] for n in data["nodes"]]
+    assert "endpoint-7" in node_ids
+    endpoint_node = next(n for n in data["nodes"] if n["id"] == "endpoint-7")
+    assert endpoint_node["name"] == "POST /payments/charge"
+    assert data["edges"][0]["target"] == "endpoint-7"
+    assert data["edges"][0]["source"] == "3"
