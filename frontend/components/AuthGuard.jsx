@@ -16,7 +16,17 @@ export default function AuthGuard({ children }) {
     })
   }, [router])
 
-  if (loading) return null
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-black">
+        <div className="flex items-center gap-2 text-alabaster-300 font-mono text-xs">
+          <span className="w-1.5 h-1.5 rounded-full bg-orange animate-pulse" />
+          Loading…
+        </div>
+      </div>
+    )
+  }
+
   if (!session) return null
   return children
 }
