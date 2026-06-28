@@ -11,11 +11,17 @@ jest.mock('@/components/AuthGuard', () => ({
 
 jest.mock('@/components/DependencyGraph', () => ({
   __esModule: true,
-  default: function MockDependencyGraph({ nodes, edges }) {
+  default: function MockDependencyGraph({ nodes, edges, onNodeClick }) {
     return (
       <div data-testid="dependency-graph">
         {nodes.map((n) => (
-          <div key={n.id} data-testid="graph-node" data-label={n.data.label}>
+          <div
+            key={n.id}
+            data-testid="graph-node"
+            data-node-id={n.id}
+            data-label={n.data.label}
+            onClick={(e) => onNodeClick && onNodeClick(e, n)}
+          >
             {n.data.label}
           </div>
         ))}
@@ -27,9 +33,31 @@ jest.mock('@/components/DependencyGraph', () => ({
   },
 }))
 
+jest.mock('@/components/ImpactPanel', () => ({
+  __esModule: true,
+  default: function MockImpactPanel({ endpointId, endpointLabel, onClose }) {
+    return (
+      <div
+        data-testid="impact-panel"
+        data-endpoint-id={String(endpointId)}
+        data-endpoint-label={endpointLabel}
+      >
+        <button onClick={onClose}>Close</button>
+      </div>
+    )
+  },
+}))
+
 jest.mock('next/dynamic', () => (_fn) => {
   return require('@/components/DependencyGraph').default
 })
+
+jest.mock('@/components/RepoInput', () => ({
+  __esModule: true,
+  default: function MockRepoInput({ onAnalysisComplete }) {
+    return <button onClick={onAnalysisComplete}>Analyze</button>
+  },
+}))
 
 jest.mock('@/lib/api', () => ({
   triggerAnalysis: jest.fn(),
@@ -45,11 +73,14 @@ beforeEach(() => {
 
 test('test_graph_page_transforms_fetchGraph_response', async () => {
   fetchGraph.mockResolvedValue({
-    nodes: [{ id: '1', name: 'order-service' }],
+    nodes: [
+      { id: '1', name: 'order-service' },
+      { id: 'endpoint-5', name: 'GET /users/{id}' },
+    ],
     edges: [
       {
         source: '1',
-        target: '2',
+        target: 'endpoint-5',
         endpoint_method: 'GET',
         endpoint_path: '/users/{id}',
         call_count: 5,
@@ -67,7 +98,7 @@ test('test_graph_page_transforms_fetchGraph_response', async () => {
   })
 
   const edge = screen.getByTestId('graph-edge')
-  expect(edge).toHaveAttribute('data-edge-id', '1-2-GET-/users/{id}')
+  expect(edge).toHaveAttribute('data-edge-id', '1-endpoint-5-GET-/users/{id}')
 })
 
 test('test_graph_page_shows_error_when_fetchGraph_fails', async () => {
@@ -83,4 +114,51 @@ test('test_graph_page_shows_error_when_fetchGraph_fails', async () => {
 
   expect(screen.queryByText('Loading graph…')).not.toBeInTheDocument()
   expect(screen.queryByTestId('dependency-graph')).not.toBeInTheDocument()
+})
+
+test('test_handleNodeClick_ignores_service_nodes', async () => {
+  fetchGraph.mockResolvedValue({
+    nodes: [{ id: '1', name: 'order-service' }],
+    edges: [],
+  })
+
+  render(<GraphPage />)
+  fireEvent.click(screen.getByText('Analyze'))
+
+  await waitFor(() => {
+    expect(screen.getByText('order-service')).toBeInTheDocument()
+  })
+
+  fireEvent.click(screen.getByText('order-service'))
+
+  expect(screen.queryByTestId('impact-panel')).not.toBeInTheDocument()
+})
+
+test('test_handleNodeClick_sets_state_for_endpoint_nodes', async () => {
+  fetchGraph.mockResolvedValue({
+    nodes: [
+      { id: '1', name: 'order-service' },
+      { id: 'endpoint-5', name: 'GET /users/{id}' },
+    ],
+    edges: [],
+  })
+
+  render(<GraphPage />)
+  fireEvent.click(screen.getByText('Analyze'))
+
+  await waitFor(() => {
+    expect(screen.getByText('GET /users/{id}')).toBeInTheDocument()
+  })
+
+  fireEvent.click(screen.getByText('GET /users/{id}'))
+
+  await waitFor(() => {
+    expect(screen.getByTestId('impact-panel')).toBeInTheDocument()
+  })
+
+  expect(screen.getByTestId('impact-panel')).toHaveAttribute('data-endpoint-id', '5')
+  expect(screen.getByTestId('impact-panel')).toHaveAttribute(
+    'data-endpoint-label',
+    'GET /users/{id}'
+  )
 })

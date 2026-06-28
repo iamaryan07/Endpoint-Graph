@@ -11,19 +11,31 @@ async def get_graph(token: str = Depends(get_github_token)):
     pool = await get_pool()
     async with pool.acquire() as conn:
         service_rows = await conn.fetch("SELECT id, name FROM services ORDER BY id")
+        endpoint_rows = await conn.fetch(
+            "SELECT DISTINCT e.id, e.method, e.path"
+            " FROM endpoints e"
+            " JOIN consumer_edges ce ON ce.endpoint_id = e.id"
+            " ORDER BY e.id"
+        )
         edge_rows = await conn.fetch(
-            "SELECT ce.caller_service_id, e.service_id AS provider_service_id,"
+            "SELECT ce.caller_service_id, ce.endpoint_id,"
             " e.path AS endpoint_path, e.method AS endpoint_method,"
             " ce.call_count, ce.last_seen_at"
             " FROM consumer_edges ce"
             " JOIN endpoints e ON e.id = ce.endpoint_id"
         )
 
-    nodes = [GraphNode(id=str(r["id"]), name=r["name"]) for r in service_rows]
+    service_nodes = [GraphNode(id=str(r["id"]), name=r["name"]) for r in service_rows]
+    endpoint_nodes = [
+        GraphNode(id=f"endpoint-{r['id']}", name=f"{r['method']} {r['path']}")
+        for r in endpoint_rows
+    ]
+    nodes = service_nodes + endpoint_nodes
+
     edges = [
         GraphEdge(
             source=str(r["caller_service_id"]),
-            target=str(r["provider_service_id"]),
+            target=f"endpoint-{r['endpoint_id']}",
             endpoint_path=r["endpoint_path"],
             endpoint_method=r["endpoint_method"],
             call_count=r["call_count"],
