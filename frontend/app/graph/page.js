@@ -7,6 +7,7 @@ import ImpactPanel from '@/components/ImpactPanel'
 import SearchBar from '@/components/SearchBar'
 import { fetchGraph } from '@/lib/api'
 import { filterGraph } from '@/lib/graphFilter'
+import { supabase } from '@/lib/supabase'
 
 const DependencyGraph = dynamic(
   () => import('@/components/DependencyGraph'),
@@ -66,9 +67,19 @@ export default function GraphPage() {
 
   const { visibleNodes, visibleEdges } = filterGraph(nodes, edges, search)
 
+  async function handleLogout() {
+    await supabase.auth.signOut()
+    window.location.href = '/login'
+  }
+
   return (
     <AuthGuard>
       <div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '8px 16px' }}>
+          <button onClick={handleLogout} style={{ fontSize: '14px', color: '#6b7280', cursor: 'pointer', background: 'none', border: 'none' }}>
+            Logout
+          </button>
+        </div>
         <RepoInput onAnalysisComplete={handleAnalysisComplete} />
         {graphError && <p>{graphError}</p>}
         {graphLoading && <p>Loading graph…</p>}
