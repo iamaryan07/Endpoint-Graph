@@ -13,10 +13,20 @@ function timeAgo(dateString) {
   return `${days}d ago`
 }
 
-function SourceBadge({ source }) {
-  const cls =
-    source === 'logs' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700'
-  return <span className={`text-xs px-2 py-0.5 rounded ${cls}`}>{source}</span>
+const METHOD_COLORS = {
+  GET:    '#7e99d5',
+  POST:   '#fca311',
+  PUT:    '#3e67bf',
+  DELETE: '#ef4444',
+  PATCH:  '#a78bfa',
+}
+
+function parseLabel(label) {
+  const parts = label.trim().split(' ')
+  if (parts.length >= 2 && ['GET','POST','PUT','DELETE','PATCH'].includes(parts[0])) {
+    return { method: parts[0], path: parts.slice(1).join(' ') }
+  }
+  return { method: null, path: label }
 }
 
 export default function ImpactPanel({ endpointId, endpointLabel, onClose }) {
@@ -30,48 +40,109 @@ export default function ImpactPanel({ endpointId, endpointLabel, onClose }) {
     setConsumers([])
     fetchImpactAnalysis(endpointId)
       .then(setConsumers)
-      .catch((err) => {
-        console.error('Impact analysis fetch failed:', err)
-        setError('Failed to load consumers. Please try again.')
-      })
+      .catch(() => setError('Failed to load consumers.'))
       .finally(() => setLoading(false))
   }, [endpointId])
 
+  const { method, path } = parseLabel(endpointLabel)
+  const maxCallCount = consumers.length > 0 ? Math.max(...consumers.map((c) => c.call_count)) : 1
+
   return (
-    <div className="fixed right-0 top-0 h-full w-80 bg-white shadow-lg border-l border-gray-200 flex flex-col z-10">
-      <div className="flex items-center justify-between p-4 border-b border-gray-200">
-        <div>
-          <p className="text-xs text-gray-500 uppercase tracking-wide">Impact Analysis</p>
-          <h2 className="font-mono text-sm font-semibold text-gray-900">{endpointLabel}</h2>
+    <div className="absolute right-0 top-0 h-full w-80 bg-prussian border-l border-prussian-600 flex flex-col z-10">
+      {/* Header */}
+      <div className="px-4 pt-4 pb-3 border-b border-prussian-600">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-orange text-xs font-mono uppercase tracking-widest mb-1.5">
+              Impact Analysis
+            </p>
+            <div className="flex items-center gap-2 flex-wrap">
+              {method && (
+                <span
+                  className="text-xs font-mono font-bold px-1.5 py-0.5 rounded"
+                  style={{
+                    color: METHOD_COLORS[method] ?? '#e5e5e5',
+                    background: 'rgba(255,255,255,0.05)',
+                    border: `1px solid ${METHOD_COLORS[method] ?? '#29447e'}`,
+                  }}
+                >
+                  {method}
+                </span>
+              )}
+              <span className="font-mono text-sm text-alabaster truncate">{path}</span>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-alabaster-300 hover:text-alabaster transition-colors mt-0.5 shrink-0"
+            aria-label="Close panel"
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <line x1="1" y1="1" x2="13" y2="13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              <line x1="13" y1="1" x2="1" y2="13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+          </button>
         </div>
-        <button
-          onClick={onClose}
-          className="text-gray-400 hover:text-gray-600 text-lg leading-none"
-          aria-label="Close"
-        >
-          ✕
-        </button>
+
+        {!loading && !error && consumers.length > 0 && (
+          <p className="text-alabaster-300 text-xs mt-3">
+            <span className="text-orange font-mono font-bold">{consumers.length}</span>
+            {' '}service{consumers.length !== 1 ? 's' : ''} will break if this endpoint changes
+          </p>
+        )}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4">
-        {loading && <p className="text-sm text-gray-500">Loading…</p>}
-        {error && <p className="text-sm text-red-500">{error}</p>}
-        {!loading && !error && consumers.length === 0 && (
-          <p className="text-sm text-gray-500">No consumers found.</p>
+      {/* Body */}
+      <div className="flex-1 overflow-y-auto">
+        {loading && (
+          <div className="flex items-center justify-center h-32">
+            <p className="text-alabaster-300 text-xs font-mono">Loading…</p>
+          </div>
         )}
+
+        {error && (
+          <div className="m-4 p-3 bg-prussian-300 border border-red-800 rounded">
+            <p className="text-red-400 text-xs font-mono">{error}</p>
+          </div>
+        )}
+
+        {!loading && !error && consumers.length === 0 && (
+          <div className="flex flex-col items-center justify-center h-32 gap-2">
+            <p className="text-alabaster-300 text-sm">No consumers found</p>
+            <p className="text-alabaster-200 text-xs font-mono">This endpoint is safe to change</p>
+          </div>
+        )}
+
         {!loading && !error && consumers.length > 0 && (
-          <ul className="space-y-3">
-            {consumers.map((c, i) => (
-              <li key={i} className="border border-gray-100 rounded p-3">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm font-medium text-gray-900">{c.service_name}</span>
-                  <SourceBadge source={c.source} />
-                </div>
-                <div className="text-xs text-gray-500">
-                  {c.call_count.toLocaleString()} calls · {timeAgo(c.last_seen_at)}
-                </div>
-              </li>
-            ))}
+          <ul className="p-4 space-y-3">
+            {consumers.map((c, i) => {
+              const barWidth = Math.round((c.call_count / maxCallCount) * 100)
+              return (
+                <li key={i} className="bg-prussian-300 border border-prussian-600 rounded-md p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-medium text-white font-mono truncate">{c.service_name}</span>
+                    <span className="text-xs font-mono text-alabaster-300 bg-prussian-400 px-1.5 py-0.5 rounded shrink-0 ml-2">
+                      {c.source}
+                    </span>
+                  </div>
+
+                  {/* Call count bar */}
+                  <div className="mb-2">
+                    <div className="h-1 bg-prussian-600 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-orange rounded-full transition-all"
+                        style={{ width: `${barWidth}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between text-xs text-alabaster-300 font-mono">
+                    <span>{c.call_count.toLocaleString()} calls</span>
+                    <span>{timeAgo(c.last_seen_at)}</span>
+                  </div>
+                </li>
+              )
+            })}
           </ul>
         )}
       </div>

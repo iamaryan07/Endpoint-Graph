@@ -1,1 +1,97 @@
 @import "tailwindcss";
+
+@theme {
+  --color-prussian: #14213d;
+  --color-prussian-100: #04070c;
+  --color-prussian-200: #080d19;
+  --color-prussian-300: #0c1425;
+  --color-prussian-400: #101b31;
+  --color-prussian-600: #29447e;
+  --color-prussian-700: #3e67bf;
+  --color-prussian-800: #7e99d5;
+  --color-prussian-900: #beccea;
+
+  --color-orange: #fca311;
+  --color-orange-100: #362101;
+  --color-orange-200: #6b4201;
+  --color-orange-300: #a16402;
+  --color-orange-400: #d68502;
+  --color-orange-600: #fdb541;
+  --color-orange-700: #fec871;
+  --color-orange-800: #fedaa0;
+  --color-orange-900: #ffedd0;
+
+  --color-alabaster: #e5e5e5;
+  --color-alabaster-100: #2e2e2e;
+  --color-alabaster-200: #5c5c5c;
+  --color-alabaster-300: #8a8a8a;
+  --color-alabaster-400: #b8b8b8;
+  --color-alabaster-600: #ebebeb;
+  --color-alabaster-700: #f0f0f0;
+  --color-alabaster-800: #f5f5f5;
+  --color-alabaster-900: #fafafa;
+}
+
+/* React Flow dark theme */
+.react-flow {
+  background: #000000;
+}
+
+.react-flow__controls {
+  background: #14213d;
+  border: 1px solid #29447e;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: none;
+}
+
+.react-flow__controls-button {
+  background: #14213d;
+  border-bottom: 1px solid #29447e;
+  color: #e5e5e5;
+}
+
+.react-flow__controls-button:hover {
+  background: #101b31;
+}
+
+.react-flow__controls-button svg {
+  fill: #e5e5e5;
+}
+
+.react-flow__controls-button:last-child {
+  border-bottom: none;
+}
+
+.react-flow__minimap {
+  background: #080d19 !important;
+  border: 1px solid #29447e;
+  border-radius: 6px;
+}
+
+.react-flow__minimap-mask {
+  fill: rgba(0, 0, 0, 0.65);
+}
+
+.react-flow__edge-textbg {
+  fill: #000000;
+  fill-opacity: 0.85;
+}
+
+.react-flow__edge-text {
+  fill: #8a8a8a;
+}
+
+.react-flow__node.selected {
+  outline: 2px solid #fca311;
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
+.react-flow__attribution {
+  background: transparent;
+}
+
+.react-flow__attribution a {
+  color: #2e2e2e;
+}
