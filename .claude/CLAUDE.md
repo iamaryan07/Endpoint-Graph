@@ -1,6 +1,6 @@
-# CLAUDE.md — EndpointGraph
+# CLAUDE.md — EndpointGraph V2
 
-Read this entire file before every response. It defines the project, every decision made, the exact stack, schema, API contract, auth flow, coding conventions, and the spec-driven workflow. Do not suggest alternatives to decisions already made. Do not implement v2 features unless explicitly asked.
+Read this entire file before every response. It defines the project, every decision made, the exact stack, schema, API contract, auth flow, coding conventions, and the spec-driven workflow. Do not suggest alternatives to decisions already made. Do not implement v3 features unless explicitly asked.
 
 ---
 
@@ -10,7 +10,7 @@ Read this entire file before every response. It defines the project, every decis
 
 It answers one question: **"If I change this API endpoint, what breaks?"**
 
-A user logs in with GitHub, pastes a GitHub repo URL (public or private), EndpointGraph clones it, runs static analysis, builds a dependency graph, and shows an interactive visualization where clicking any endpoint reveals every service that calls it.
+A user logs in with GitHub. They see a list of their own repos and click **Track** on any repo. EndpointGraph clones it, runs static analysis, builds a dependency graph scoped to that repo and that user, and shows an interactive visualization where clicking any endpoint reveals every service that calls it.
 
 ---
 
@@ -40,21 +40,36 @@ All Claude context, specs, commands, and agents live in `.claude/`. Never build 
 └── agents/            ← agents for test running, spec validation
 ```
 
-### Spec files (implement in this order)
+### V1 specs (shipped — do not re-implement)
 
 ```
 specs/
-├── 01-db-schema.md          ← create tables in Supabase
-├── 02-github-auth.md        ← Supabase Auth + GitHub OAuth
-├── 03-repo-cloner.md        ← git clone with GitHub token
-├── 04-openapi-parser.md     ← PyYAML OpenAPI spec parser
-├── 05-treesitter-extractor.md ← tree-sitter call-site + route decorator extraction
-├── 06-url-matcher.md        ← match extracted URLs to known endpoint paths
-├── 07-analyze-route.md      ← POST /analyze — orchestrates 03 through 06
-├── 08-api-routes.md         ← remaining FastAPI routes (GET /graph, /impact-analysis, etc.)
-├── 09-frontend-graph.md     ← React Flow graph visualization
-├── 10-impact-panel.md       ← side panel on node click
-└── 11-search.md             ← search bar to filter endpoints
+├── 01-db-schema.md
+├── 02-github-auth.md
+├── 03-repo-cloner.md
+├── 04-openapi-parser.md
+├── 05-treesitter-extractor.md
+├── 06-url-matcher.md
+├── 07-analyze-route.md
+├── 08-api-routes.md
+├── 09-frontend-graph.md
+├── 10-impact-panel.md
+└── 11-search.md
+```
+
+### V2 specs (implement in this order)
+
+```
+specs/
+├── v2-01-db-migration.md      ← add user_id + repo_id to services, unique constraints, RLS
+├── v2-02-backend-auth.md      ← extract user_id from GitHub token, pass to all DB writes
+├── v2-03-upsert.md            ← upsert services + endpoints on re-analysis (no duplicates)
+├── v2-04-recursive-scan.md    ← full-depth service discovery, skip IGNORED_DIRS
+├── v2-05-js-parser.md         ← extend code_parser.py for .js/.jsx/.ts/.tsx
+├── v2-06-repos-route.md       ← GET /repos — GitHub repo list with tracked status
+├── v2-07-repos-page.md        ← frontend /repos page — Track / Re-analyze buttons
+├── v2-08-scoped-graph.md      ← GET /graph?repo_id=... scoped per repo + user; persist on refresh
+└── v2-09-delete-service.md    ← DELETE /services/{id} — untrack a repo
 ```
 
 ### Command files
@@ -88,11 +103,11 @@ agents/
 | Auth (frontend) | Supabase JS client | v2 | GitHub OAuth only — not for DB queries |
 | Backend framework | FastAPI | latest | REST API + analysis engine |
 | Backend language | Python | 3.11+ | All backend code |
-| Static analysis | tree-sitter + tree-sitter-languages | latest | Parse Python code |
+| Static analysis | tree-sitter + tree-sitter-languages | latest | Parse Python + JS/TS code |
 | Spec parsing | PyYAML | latest | Parse openapi.yaml files |
 | Repo cloning | subprocess (stdlib) | — | git clone with GitHub token |
 | DB driver | asyncpg | latest | Async PostgreSQL driver |
-| Database | Supabase | PostgreSQL 15 | Hosted DB + Auth provider |
+| Database | Supabase | PostgreSQL 15 | Hosted DB + Auth provider + RLS |
 | Testing (backend) | pytest + pytest-asyncio | latest | Backend unit + integration tests |
 | Testing (frontend) | Jest | latest | Frontend component tests |
 | Linting (Python) | ruff | latest | Fast Python linter |
@@ -100,7 +115,7 @@ agents/
 
 ### Not in the stack — do not suggest
 
-- No TypeScript anywhere
+- No TypeScript anywhere in the frontend
 - No Docker or docker-compose
 - No SQLAlchemy or any ORM — raw asyncpg queries only
 - No Neo4j or graph database
@@ -118,24 +133,27 @@ Browser
   ↓
 Next.js 16 — App Router, JavaScript, Tailwind v4
   ├── Supabase JS client (auth ONLY — login, logout, get session + GitHub token)
-  └── fetch() to FastAPI (all data — graph, impact analysis, trigger analysis)
+  └── fetch() to FastAPI (all data — graph, impact analysis, trigger analysis, repo list)
         ↓
 FastAPI — Python, asyncpg
   ├── Reads X-GitHub-Token header from frontend requests
+  ├── Calls GitHub API to get user_id (GET /user)
   ├── Clones private/public repos using the GitHub token
-  ├── Runs tree-sitter + PyYAML analysis on cloned code
-  └── asyncpg
+  ├── Runs tree-sitter + PyYAML analysis on cloned code (Python + JS/TS)
+  └── asyncpg → Supabase (RLS enforces per-user isolation at DB layer)
         ↓
 Supabase — PostgreSQL 15
   ├── auth.users (managed by Supabase Auth — do not touch directly)
-  ├── public.services
-  ├── public.endpoints
-  └── public.consumer_edges
+  ├── public.services  (user_id + repo_id scoped)
+  ├── public.endpoints (cascades from services)
+  └── public.consumer_edges (cascades from services)
 ```
 
-**Two rules that must never be broken:**
+**Rules that must never be broken:**
 1. Next.js uses the Supabase JS client for auth only. All graph/analysis data goes through FastAPI.
 2. FastAPI never imports Supabase JS client. It connects to PostgreSQL directly via asyncpg using `DATABASE_URL`.
+3. Every DB write from FastAPI includes `user_id` (extracted from GitHub token via GitHub API).
+4. `GET /graph` always takes a `repo_id` query param — never returns all repos mixed together.
 
 ---
 
@@ -166,16 +184,17 @@ endpointgraph/
 │   ├── main.py                ← FastAPI app, lifespan, router registration
 │   ├── database.py            ← asyncpg pool (create once, reuse)
 │   ├── models.py              ← Pydantic request/response models
-│   ├── auth.py                ← GitHub token extraction from request header
+│   ├── auth.py                ← GitHub token extraction + user_id resolution
 │   ├── routers/
-│   │   ├── services.py        ← GET /services
+│   │   ├── services.py        ← GET /services, DELETE /services/{id}
 │   │   ├── endpoints.py       ← GET /endpoints, GET /endpoints/{id}/impact-analysis
-│   │   ├── graph.py           ← GET /graph
+│   │   ├── graph.py           ← GET /graph?repo_id=...
+│   │   ├── repos.py           ← GET /repos (proxies GitHub API + annotates tracked status)
 │   │   └── analyze.py         ← POST /analyze
 │   ├── analysis/
 │   │   ├── cloner.py          ← git clone repo using GitHub token into tmp dir
 │   │   ├── spec_parser.py     ← PyYAML: openapi.yaml → endpoints list
-│   │   ├── code_parser.py     ← tree-sitter: route decorators + HTTP call sites
+│   │   ├── code_parser.py     ← tree-sitter: route decorators + HTTP call sites (Python + JS/TS)
 │   │   └── url_matcher.py     ← match /users/123 → /users/{id}
 │   ├── tests/
 │   │   ├── test_spec_parser.py
@@ -188,16 +207,21 @@ endpointgraph/
 ├── frontend/
 │   ├── app/
 │   │   ├── layout.js
-│   │   ├── page.js            ← redirect to /graph if logged in, else /login
+│   │   ├── page.js            ← redirect to /repos if logged in, else /login
 │   │   ├── login/
 │   │   │   └── page.js        ← GitHub OAuth login button
-│   │   └── graph/
-│   │       └── page.js        ← main graph page (protected route)
+│   │   ├── repos/
+│   │   │   └── page.js        ← repo browser (protected route)
+│   │   ├── graph/
+│   │   │   └── page.js        ← graph view for one repo: /graph?repo=owner/name
+│   │   └── auth/
+│   │       └── callback/
+│   │           └── route.js   ← OAuth callback handler
 │   ├── components/
 │   │   ├── DependencyGraph.jsx   ← React Flow (dynamic import, ssr:false)
 │   │   ├── ImpactPanel.jsx       ← side panel: consumers on node click
 │   │   ├── SearchBar.jsx         ← filter nodes by endpoint path
-│   │   ├── RepoInput.jsx         ← input for GitHub repo URL + analyze button
+│   │   ├── RepoList.jsx          ← repo browser: Track / Re-analyze per repo
 │   │   └── AuthGuard.jsx         ← redirect to /login if no session
 │   ├── lib/
 │   │   ├── supabase.js           ← createClient — used for auth ONLY
@@ -206,33 +230,30 @@ endpointgraph/
 │   ├── package.json
 │   └── .env.local                ← NEXT_PUBLIC vars. Never committed.
 │
-└── sample-services/              ← fake microservices for demo
-    ├── order-service/
-    │   ├── main.py
-    │   └── openapi.yaml
-    ├── payment-service/
-    │   ├── main.py
-    │   └── openapi.yaml
-    └── user-service/
-        ├── main.py
-        └── openapi.yaml
+└── v2.md                         ← full v2 plan (reference doc)
 ```
+
+Note: `sample-services/` has been moved to its own repo at `github.com/iamaryan07/sample-services`.
 
 ---
 
 ## Database schema
 
-All tables are in the `public` schema in Supabase. The `auth.users` table is managed by Supabase Auth — never create or alter it.
+All tables are in the `public` schema in Supabase. The `auth.users` table is managed by Supabase Auth — never create or alter it. RLS is enabled on all three tables.
 
 ### Table: `services`
 
 ```sql
 CREATE TABLE public.services (
-  id          SERIAL PRIMARY KEY,
-  name        VARCHAR(100) NOT NULL,
-  language    VARCHAR(50),
-  repo_url    VARCHAR(255),
-  created_at  TIMESTAMP DEFAULT NOW()
+  id                SERIAL PRIMARY KEY,
+  name              VARCHAR(100) NOT NULL,
+  language          VARCHAR(50),
+  repo_url          VARCHAR(255),
+  user_id           UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  repo_id           VARCHAR(255),           -- e.g. "iamaryan07/sample-services"
+  last_analyzed_at  TIMESTAMP DEFAULT NOW(),
+  created_at        TIMESTAMP DEFAULT NOW(),
+  UNIQUE (user_id, repo_id, name)           -- re-analysis upserts, never duplicates
 );
 ```
 
@@ -244,8 +265,9 @@ CREATE TABLE public.endpoints (
   service_id   INT NOT NULL REFERENCES public.services(id) ON DELETE CASCADE,
   method       VARCHAR(10) NOT NULL,    -- GET | POST | PUT | DELETE
   path         VARCHAR(255) NOT NULL,   -- /users/{id}
-  spec_source  VARCHAR(50),            -- openapi | decorator | live_spec
-  created_at   TIMESTAMP DEFAULT NOW()
+  spec_source  VARCHAR(50),            -- openapi | decorator | decorator_js | nextjs_route
+  created_at   TIMESTAMP DEFAULT NOW(),
+  UNIQUE (service_id, method, path)    -- re-analysis upserts, never duplicates
 );
 ```
 
@@ -264,14 +286,52 @@ CREATE TABLE public.consumer_edges (
 );
 ```
 
+### RLS policies
+
+```sql
+ALTER TABLE public.services ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.endpoints ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.consumer_edges ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "users see own services"
+  ON public.services FOR ALL
+  USING (user_id = auth.uid());
+
+CREATE POLICY "users see own endpoints"
+  ON public.endpoints FOR ALL
+  USING (
+    service_id IN (SELECT id FROM public.services WHERE user_id = auth.uid())
+  );
+
+CREATE POLICY "users see own edges"
+  ON public.consumer_edges FOR ALL
+  USING (
+    caller_service_id IN (SELECT id FROM public.services WHERE user_id = auth.uid())
+  );
+```
+
 ### Why each column exists
 
 | Column | Why |
 |---|---|
+| `services.user_id` | Scopes all data to the logged-in user — enforced by RLS |
+| `services.repo_id` | Scopes graph view to one repo (e.g. `iamaryan07/sample-services`) |
+| `services.last_analyzed_at` | Shows when a repo was last analyzed in the repo browser |
+| `services UNIQUE(user_id, repo_id, name)` | Re-analysis upserts rows instead of creating duplicates |
+| `endpoints UNIQUE(service_id, method, path)` | Same — re-analysis is idempotent |
 | `consumer_edges.last_seen_at` | Dependency seen 8 months ago vs 2 minutes ago = very different risk |
 | `consumer_edges.call_count` | 1 call/day vs 10,000/min = very different blast radius |
-| `consumer_edges.source` | `static` = found in code (possible false positives). `logs` = confirmed live traffic (v2 only) |
+| `consumer_edges.source` | `static` = found in code. `logs` = confirmed live traffic (v3 only) |
 | `endpoints.spec_source` | Tracks how the endpoint was discovered — affects confidence shown in UI |
+
+### spec_source values
+
+| Value | Meaning |
+|---|---|
+| `openapi` | Found in openapi.yaml |
+| `decorator` | Python route decorator (FastAPI / Flask) |
+| `decorator_js` | JS/TS Express route handler |
+| `nextjs_route` | Next.js file-based routing |
 
 ---
 
@@ -285,13 +345,15 @@ CREATE TABLE public.consumer_edges (
 3. Supabase Auth redirects to GitHub OAuth consent screen
 4. User approves → GitHub redirects back to /auth/callback
 5. Supabase exchanges code for tokens, stores session
-6. session.provider_token = GitHub personal access token
+6. session.provider_token = GitHub OAuth token
 7. Frontend stores session in memory (Supabase handles this)
-8. User is redirected to /graph
-9. When user triggers analysis:
+8. User is redirected to /repos
+9. When user clicks Track on a repo:
    - Frontend reads session.provider_token
    - Sends it to FastAPI as X-GitHub-Token header
-   - FastAPI uses it to git clone the repo (public or private)
+   - FastAPI calls GET https://api.github.com/user to resolve user_id
+   - FastAPI uses the token to git clone the repo (public or private)
+   - All DB writes include user_id
 ```
 
 ### Frontend auth setup
@@ -335,7 +397,7 @@ export async function GET(request) {
   const { searchParams } = new URL(request.url)
   const code = searchParams.get('code')
   await supabase.auth.exchangeCodeForSession(code)
-  return NextResponse.redirect(new URL('/graph', request.url))
+  return NextResponse.redirect(new URL('/repos', request.url))
 }
 ```
 
@@ -345,7 +407,16 @@ import { supabase } from './supabase'
 
 async function getGitHubToken() {
   const { data: { session } } = await supabase.auth.getSession()
-  return session?.provider_token  // this is the GitHub OAuth token
+  return session?.provider_token
+}
+
+export async function fetchUserRepos() {
+  const token = await getGitHubToken()
+  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/repos`, {
+    headers: { 'X-GitHub-Token': token }
+  })
+  if (!res.ok) throw new Error(await extractError(res))
+  return res.json()  // [{ name, full_name, private, updated_at, tracked, last_analyzed_at }]
 }
 
 export async function triggerAnalysis(repoUrl) {
@@ -358,14 +429,17 @@ export async function triggerAnalysis(repoUrl) {
     },
     body: JSON.stringify({ repo_url: repoUrl })
   })
+  if (!res.ok) throw new Error(await extractError(res))
   return res.json()
 }
 
-export async function fetchGraph() {
+export async function fetchGraph(repoId) {
   const token = await getGitHubToken()
-  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/graph`, {
-    headers: { 'X-GitHub-Token': token }
-  })
+  const res = await fetch(
+    `${process.env.NEXT_PUBLIC_API_URL}/graph?repo_id=${encodeURIComponent(repoId)}`,
+    { headers: { 'X-GitHub-Token': token } }
+  )
+  if (!res.ok) throw new Error(await extractError(res))
   return res.json()
 }
 
@@ -375,20 +449,55 @@ export async function fetchImpactAnalysis(endpointId) {
     `${process.env.NEXT_PUBLIC_API_URL}/endpoints/${endpointId}/impact-analysis`,
     { headers: { 'X-GitHub-Token': token } }
   )
+  if (!res.ok) throw new Error(await extractError(res))
   return res.json()
+}
+
+export async function deleteService(serviceId) {
+  const token = await getGitHubToken()
+  const res = await fetch(
+    `${process.env.NEXT_PUBLIC_API_URL}/services/${serviceId}`,
+    { method: 'DELETE', headers: { 'X-GitHub-Token': token } }
+  )
+  if (!res.ok) throw new Error(await extractError(res))
+}
+
+async function extractError(res) {
+  const text = await res.text()
+  try {
+    const json = JSON.parse(text)
+    if (typeof json.detail === 'string') return json.detail
+    if (Array.isArray(json.detail)) return json.detail.map((e) => e.msg ?? String(e)).join(', ')
+    return text
+  } catch {
+    return text
+  }
 }
 ```
 
-### Backend token extraction
+### Backend token extraction + user_id resolution
 
 ```python
 # auth.py
+import httpx
 from fastapi import Header, HTTPException
 
 async def get_github_token(x_github_token: str = Header(alias="X-GitHub-Token")):
     if not x_github_token:
         raise HTTPException(status_code=401, detail="GitHub token required")
     return x_github_token
+
+async def get_github_user_id(token: str) -> str:
+    async with httpx.AsyncClient() as client:
+        res = await client.get(
+            "https://api.github.com/user",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+    if res.status_code != 200:
+        raise HTTPException(status_code=401, detail="Could not resolve GitHub user")
+    # GitHub node_id is a stable string ID that matches Supabase auth.users.raw_user_meta_data
+    # Use res.json()["id"] (integer) — map to Supabase user via sub claim in JWT
+    return str(res.json()["id"])
 ```
 
 ```python
@@ -402,7 +511,7 @@ router = APIRouter()
 @router.post("/analyze")
 async def analyze(request: AnalyzeRequest, token: str = Depends(get_github_token)):
     tmp_dir = clone_repo(request.repo_url, token)
-    # run analysis on tmp_dir...
+    # run analysis on tmp_dir, write to DB with user_id...
 ```
 
 ---
@@ -411,21 +520,9 @@ async def analyze(request: AnalyzeRequest, token: str = Depends(get_github_token
 
 ```python
 # analysis/cloner.py
-import subprocess
-import tempfile
-import uuid
-import shutil
-import re
-import os
+import subprocess, tempfile, uuid, shutil, re, os
 
 def clone_repo(repo_url: str, github_token: str) -> str:
-    """
-    Clone a GitHub repo (public or private) using the GitHub token.
-    Returns path to temp directory. Caller must delete it after analysis.
-    """
-    # Normalize URL — accept both formats:
-    # github.com/user/repo
-    # https://github.com/user/repo
     repo_url = repo_url.strip()
     repo_url = re.sub(r'^https?://', '', repo_url)
     if not repo_url.startswith('github.com/'):
@@ -434,52 +531,78 @@ def clone_repo(repo_url: str, github_token: str) -> str:
     auth_url = f"https://{github_token}@{repo_url}"
     tmp_dir = os.path.join(tempfile.gettempdir(), str(uuid.uuid4()))
 
-    result = subprocess.run(
-        ["git", "clone", "--depth", "1", auth_url, tmp_dir],
-        capture_output=True,
-        text=True
-    )
+    try:
+        result = subprocess.run(
+            ["git", "clone", "--depth", "1", auth_url, tmp_dir],
+            capture_output=True, text=True, timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise RuntimeError("Clone timed out after 60 seconds")
 
     if result.returncode != 0:
         raise RuntimeError(f"Clone failed: {result.stderr}")
 
     return tmp_dir
 
-def delete_repo(tmp_dir: str):
-    """Always call this after analysis to clean up."""
+def delete_repo(tmp_dir: str) -> None:
     shutil.rmtree(tmp_dir, ignore_errors=True)
 ```
 
-**Important:** `--depth 1` clones only the latest commit. Faster, less storage. Always delete the temp dir after analysis — use try/finally.
+`--depth 1` clones only the latest commit. Always delete the temp dir after analysis — use try/finally.
 
 ---
 
 ## Static analysis
 
-### tree-sitter — two jobs
+### Service discovery — recursive, no depth limit
+
+```python
+IGNORED_DIRS = {'.git', 'node_modules', '.venv', '__pycache__', 'dist', 'build', '.next', 'coverage'}
+
+def find_service_folders(root: str) -> list[str]:
+    results = []
+    def walk(path):
+        for entry in os.listdir(path):
+            full = os.path.join(path, entry)
+            if not os.path.isdir(full) or entry in IGNORED_DIRS:
+                continue
+            if _is_service_folder(full):
+                results.append(full)
+            else:
+                walk(full)   # recurse — no depth cap
+    walk(root)
+    return results
+```
+
+No hardcoded depth limit. `IGNORED_DIRS` is what bounds the traversal. Once a folder is identified as a service, its subdirectories are not recursed into — a service folder is a leaf.
+
+### Endpoint discovery priority
+
+When analyzing a service folder:
+
+1. `openapi.yaml` or `openapi.json` exists → parse with PyYAML (most reliable)
+2. No spec file → scan `.py`, `.js`, `.jsx`, `.ts`, `.tsx` files with tree-sitter for route decorators
+
+### tree-sitter — two jobs, Python + JS/TS
 
 **Job 1 — Find what a service EXPOSES (route decorators → endpoints table)**
 
 ```python
-# Finds: @app.get("/users/{id}") → method=GET, path=/users/{id}
-# Finds: @app.post("/orders") → method=POST, path=/orders
-# Works for FastAPI and Flask decorators
+# Python:  @app.get("/users/{id}")  → method=GET, path=/users/{id}
+# Express: app.get('/users/:id', ...) → method=GET, path=/users/:id
+# Next.js: /app/api/users/route.js → GET /api/users (filename-based)
 ```
 
 **Job 2 — Find what a service CALLS (HTTP client calls → consumer_edges)**
 
 ```python
-# Finds: requests.get("http://user-service/users/123")
-# Finds: requests.post("http://payment-service/payments/charge")
-# Extracts the URL string, then url_matcher maps it to a known path
+# Python: requests.get("http://user-service/users/1")
+# JS:     fetch("http://user-service/users/1")
+# JS:     axios.get("http://user-service/users/1")
 ```
 
-### Endpoint discovery priority
-
-When analyzing a service folder, check in this order:
-
-1. `openapi.yaml` or `openapi.json` exists → parse with PyYAML (most reliable)
-2. No spec file → scan `.py` files with tree-sitter for route decorators
+The URL matcher operates on the extracted URL string — it works regardless of source language.
 
 ### URL matching
 
@@ -488,13 +611,8 @@ When analyzing a service folder, check in this order:
 import re
 
 def match_url_to_endpoint(url_path: str, known_paths: list[str]) -> str | None:
-    """
-    Match /users/123 to /users/{id}
-    Match /orders/abc-456 to /orders/{id}
-    """
     url_path = url_path.strip('/')
     for path in known_paths:
-        # Convert {id}, {user_id}, {any_param} → regex that matches any non-slash string
         pattern = re.sub(r'\{[^}]+\}', r'[^/]+', path.strip('/'))
         if re.fullmatch(pattern, url_path):
             return path
@@ -508,11 +626,13 @@ def match_url_to_endpoint(url_path: str, known_paths: list[str]) -> str | None:
 Base URL local: `http://localhost:8000`
 All routes require `X-GitHub-Token` header.
 
-| Method | Route | Request body | Returns |
+| Method | Route | Request body / params | Returns |
 |---|---|---|---|
 | POST | `/analyze` | `{repo_url: string}` | `{status: "ok", services: int, endpoints: int, edges: int}` |
-| GET | `/graph` | — | `{nodes: [...], edges: [...]}` |
-| GET | `/services` | — | `[{id, name, language, repo_url}]` |
+| GET | `/graph` | `?repo_id=owner/name` | `{nodes: [...], edges: [...]}` |
+| GET | `/repos` | — | `[{name, full_name, private, updated_at, tracked, last_analyzed_at}]` |
+| GET | `/services` | — | `[{id, name, language, repo_url, repo_id, last_analyzed_at}]` |
+| DELETE | `/services/{id}` | — | `{status: "deleted"}` |
 | GET | `/endpoints` | `?service_id=1` (optional) | `[{id, service_id, method, path, spec_source}]` |
 | GET | `/endpoints/{id}/impact-analysis` | — | `[{service_name, call_count, last_seen_at, source}]` |
 
@@ -537,6 +657,16 @@ class ServiceOut(BaseModel):
     name: str
     language: str | None
     repo_url: str | None
+    repo_id: str | None
+    last_analyzed_at: datetime | None
+
+class RepoOut(BaseModel):
+    name: str
+    full_name: str
+    private: bool
+    updated_at: str
+    tracked: bool
+    last_analyzed_at: datetime | None
 
 class EndpointOut(BaseModel):
     id: int
@@ -573,14 +703,27 @@ class GraphOut(BaseModel):
 ## Core SQL queries
 
 ```sql
--- Impact analysis: who calls endpoint X
-SELECT s.name AS service_name, ce.call_count, ce.last_seen_at, ce.source
-FROM consumer_edges ce
-JOIN services s ON s.id = ce.caller_service_id
-WHERE ce.endpoint_id = $1
-ORDER BY ce.call_count DESC;
+-- Upsert service (re-analysis updates last_analyzed_at, never creates duplicate)
+INSERT INTO services (name, language, repo_url, user_id, repo_id, last_analyzed_at)
+VALUES ($1, $2, $3, $4, $5, NOW())
+ON CONFLICT (user_id, repo_id, name)
+DO UPDATE SET last_analyzed_at = NOW(), language = EXCLUDED.language
+RETURNING id;
 
--- Full graph: all nodes and edges for React Flow
+-- Upsert endpoint (re-analysis is idempotent)
+INSERT INTO endpoints (service_id, method, path, spec_source)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (service_id, method, path)
+DO NOTHING
+RETURNING id;
+
+-- Upsert edge (on re-analysis, update timestamp)
+INSERT INTO consumer_edges (caller_service_id, endpoint_id, last_seen_at, call_count, source)
+VALUES ($1, $2, NOW(), 1, $3)
+ON CONFLICT (caller_service_id, endpoint_id)
+DO UPDATE SET last_seen_at = NOW(), source = EXCLUDED.source;
+
+-- Graph: nodes + edges for one repo, one user (RLS also enforces user filter)
 SELECT
   s.id, s.name,
   ce.caller_service_id, ce.endpoint_id,
@@ -588,13 +731,15 @@ SELECT
   ce.call_count, ce.last_seen_at
 FROM consumer_edges ce
 JOIN services s ON s.id = ce.caller_service_id
-JOIN endpoints e ON e.id = ce.endpoint_id;
+JOIN endpoints e ON e.id = ce.endpoint_id
+WHERE s.repo_id = $1;
 
--- Upsert edge (on re-analysis, update existing edge)
-INSERT INTO consumer_edges (caller_service_id, endpoint_id, last_seen_at, call_count, source)
-VALUES ($1, $2, NOW(), 1, $3)
-ON CONFLICT (caller_service_id, endpoint_id)
-DO UPDATE SET last_seen_at = NOW(), source = EXCLUDED.source;
+-- Impact analysis: who calls endpoint X
+SELECT s.name AS service_name, ce.call_count, ce.last_seen_at, ce.source
+FROM consumer_edges ce
+JOIN services s ON s.id = ce.caller_service_id
+WHERE ce.endpoint_id = $1
+ORDER BY ce.call_count DESC;
 ```
 
 ---
@@ -603,17 +748,21 @@ DO UPDATE SET last_seen_at = NOW(), source = EXCLUDED.source;
 
 ```python
 # database.py
-import asyncpg
-import os
+import asyncpg, os
 from dotenv import load_dotenv
 
 load_dotenv()
 _pool = None
 
-async def get_pool():
+async def get_pool() -> asyncpg.Pool:
     global _pool
     if _pool is None:
-        _pool = await asyncpg.create_pool(os.getenv("DATABASE_URL"), min_size=2, max_size=10)
+        _pool = await asyncpg.create_pool(
+            os.getenv("DATABASE_URL"),
+            min_size=2,
+            max_size=10,
+            statement_cache_size=0,   # required for Supabase PgBouncer
+        )
     return _pool
 
 # main.py
@@ -623,11 +772,13 @@ from database import get_pool
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await get_pool()  # warm on startup
+    await get_pool()
     yield
 
 app = FastAPI(lifespan=lifespan)
 ```
+
+`statement_cache_size=0` is required — Supabase uses PgBouncer in transaction mode which does not support prepared statements.
 
 ---
 
@@ -639,12 +790,11 @@ app = FastAPI(lifespan=lifespan)
 - Components: `.jsx` (React components)
 - Utilities: `.js`
 - No `tsconfig.json`, no type annotations, no `.ts` or `.tsx` files
-- Use JSDoc `/** @param {string} url */` for documentation where helpful but not required
 
 ### Tailwind v4 setup
 
 ```css
-/* globals.css — entire Tailwind config */
+/* globals.css */
 @import "tailwindcss";
 
 @theme {
@@ -665,12 +815,7 @@ import '@xyflow/react/dist/style.css'
 export default function DependencyGraph({ nodes, edges, onNodeClick }) {
   return (
     <div style={{ width: '100%', height: '100vh' }}>
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        onNodeClick={onNodeClick}
-        fitView
-      >
+      <ReactFlow nodes={nodes} edges={edges} onNodeClick={onNodeClick} fitView>
         <Background />
         <Controls />
         <MiniMap />
@@ -690,9 +835,34 @@ const DependencyGraph = dynamic(
 )
 ```
 
+### Graph page reads repo from URL, fetches on mount
+
+```javascript
+// app/graph/page.js
+'use client'
+import { useSearchParams } from 'next/navigation'
+import { useEffect, useState } from 'react'
+import { fetchGraph } from '@/lib/api'
+
+export default function GraphPage() {
+  const searchParams = useSearchParams()
+  const repoId = searchParams.get('repo')  // e.g. "iamaryan07/sample-services"
+  const [nodes, setNodes] = useState([])
+  const [edges, setEdges] = useState([])
+
+  useEffect(() => {
+    if (!repoId) return
+    fetchGraph(repoId).then(/* build rfNodes + rfEdges, call setNodes/setEdges */)
+  }, [repoId])
+  // ...
+}
+```
+
+Graph persists on refresh because `repoId` comes from the URL, not component state.
+
 ### All API calls live in lib/api.js
 
-No inline `fetch()` inside components or pages. Every call to FastAPI goes through `lib/api.js`. Components call functions from `api.js`, not raw fetch.
+No inline `fetch()` inside components or pages. Every call to FastAPI goes through `lib/api.js`.
 
 ---
 
@@ -727,84 +897,19 @@ DATABASE_URL
 ## Python virtual environment
 
 All Python work happens inside `.venv`. No exceptions.
-Never use system Python, never install packages globally.
 
-### Rules
-
-- The venv lives at `backend/.venv` — always inside the backend folder, never at the project root
-- Always activate before running any Python command: `pip`, `pytest`, `uvicorn`, `ruff`, `python`
+- Lives at `backend/.venv` — never at the project root
+- Always activate before running any Python command
 - `.venv` is in `.gitignore` — never commit it
-- Every package installed must be added to `requirements.txt` with a pinned version
-
-### Creating the venv (first time only)
+- Every package installed must be added to `requirements.txt` with a pinned version (`==`)
 
 ```bash
-cd backend
-python3 -m venv .venv
-```
-
-### Activating (every terminal session)
-
-```bash
-# macOS / Linux
-source backend/.venv/bin/activate
-
-# Windows
+# Windows — activate
 backend\.venv\Scripts\activate
-```
 
-Prompt will show `(.venv)` when active. If it does not show, the venv is not active — do not run any commands.
-
-### Installing packages
-
-```bash
-# Always activate first, then install
+# macOS / Linux — activate
 source backend/.venv/bin/activate
-pip install <package>
-```
 
-After installing any new package, immediately update `requirements.txt`:
-
-```bash
-pip freeze > requirements.txt
-```
-
-Or manually add the pinned version:
-```
-fastapi==0.111.0
-```
-
-Never leave `requirements.txt` with unpinned versions like `fastapi` — always `fastapi==0.111.0`.
-
-### requirements.txt rules
-
-- Every package is pinned to an exact version (`==`)
-- No version ranges (`>=`, `~=`) — they cause silent breakage on fresh installs
-- Keep it sorted alphabetically for readability
-- Update it immediately after every `pip install` — not at the end of the session
-- When a spec requires a new package, the spec's "Files to edit" must include `requirements.txt`
-
-### Example requirements.txt
-
-```
-asyncpg==0.29.0
-fastapi==0.111.0
-httpx==0.27.0
-psycopg2-binary==2.9.9
-pydantic==2.7.1
-pytest==8.2.0
-pytest-asyncio==0.23.6
-python-dotenv==1.0.1
-pyyaml==6.0.1
-ruff==0.4.4
-tree-sitter==0.22.3
-tree-sitter-languages==1.10.2
-uvicorn==0.29.0
-```
-
-### Commands — always with .venv active
-
-```bash
 # Run backend
 uvicorn main:app --reload --port 8000
 
@@ -814,8 +919,7 @@ python -m pytest tests/ -v
 # Lint
 ruff check .
 
-# Install a new package and pin it
-pip install somepackage
+# After any pip install
 pip freeze > requirements.txt
 ```
 
@@ -841,63 +945,63 @@ npm run dev                     # runs on localhost:3000
 
 ## Key decisions — do not re-litigate
 
-### GitHub OAuth in v1
-GitHub OAuth is v1, not v2. The reason: without it, the project only works for public repos and the user flow is weak (paste a URL with no auth context). With OAuth, users get private repo access and the flow is: login → paste URL → see graph. This is the product. Complexity is manageable using Supabase Auth which handles GitHub OAuth with minimal code.
-
 ### PostgreSQL over Neo4j
-The core query is 1 hop: "who calls endpoint X" = one JOIN on `consumer_edges`. PostgreSQL handles this trivially. No need for a graph database at this scale.
+The core query is 1 hop: "who calls endpoint X" = one JOIN on `consumer_edges`. PostgreSQL handles this trivially with RLS on top.
 
-### Endpoint-level only (v1)
-EndpointGraph v1 tracks that Service A calls `GET /users/{id}`. It does NOT track which response fields Service A reads. Field-level impact analysis is v2.
+### Endpoint-level only
+EndpointGraph tracks that Service A calls `GET /users/{id}`. It does NOT track which response fields Service A reads. Field-level impact analysis is v3.
 
-### Static analysis only (v1)
-Only tree-sitter + OpenAPI parsing. No log ingestion (Envoy/NGINX). The `source` column will only ever be `'static'` in v1.
-
-### Python only (tree-sitter, v1)
-tree-sitter analysis only runs on Python files. Multi-language support is v2.
+### Static analysis only
+Only tree-sitter + OpenAPI parsing. No log ingestion (Envoy/NGINX). The `source` column will only ever be `'static'` in v2.
 
 ### No ORM
-Raw asyncpg queries. No SQLAlchemy. Queries are simple enough that an ORM adds no value and hides what's happening.
+Raw asyncpg queries. No SQLAlchemy. Queries are simple enough that an ORM adds no value.
 
-### JavaScript not TypeScript
-The project is straightforward enough that TypeScript would add friction without meaningful benefit. All files are `.js` or `.jsx`.
+### JavaScript not TypeScript (frontend)
+The frontend is straightforward enough that TypeScript would add friction without meaningful benefit. All frontend files are `.js` or `.jsx`. The backend parses JS/TS source files with tree-sitter but the backend itself is Python.
 
 ### No Docker
-Deploying to Vercel (frontend) + Railway (backend) + Supabase (DB). Docker is not needed. Local dev uses two terminal tabs.
+Deploying to Vercel + Railway + Supabase. Docker is not needed.
+
+### RLS at the DB layer
+User isolation is enforced by Supabase RLS, not just application code. This means even a bug in FastAPI cannot leak User A's data to User B — the DB rejects it.
+
+### Repo browser replaces URL input
+Users can only track repos they own (what the GitHub token can see). This removes the attack surface of users cloning arbitrary public repos through the backend and makes the UX self-evident.
+
+### No depth limit on service discovery
+`IGNORED_DIRS` is what bounds the traversal, not an arbitrary depth number. A well-structured monorepo at depth 5 should be fully discovered.
 
 ---
 
-## v1 scope
+## V2 scope
 
-### In v1
-- [x] GitHub OAuth login via Supabase Auth (with `repo` scope for private repos)
-- [x] User pastes GitHub repo URL → FastAPI clones it
-- [x] OpenAPI YAML parsing → endpoint discovery
-- [x] tree-sitter Python route decorator parsing → endpoint discovery fallback
-- [x] tree-sitter Python HTTP call-site extraction → consumer_edges
-- [x] URL-to-path matching
-- [x] GET /graph, GET /endpoints/{id}/impact-analysis, GET /services, GET /endpoints, POST /analyze
-- [x] React Flow graph visualization
-- [x] Click endpoint → highlight consumers + side panel
-- [x] Search bar to filter by endpoint path
-- [x] Sample microservices repo (3 services) for demo
-- [x] Deploy: Vercel + Railway + Supabase
+### In v2
+- [x] V1 fully shipped (login, analyze, graph, impact panel, search)
+- [ ] DB migration: add `user_id`, `repo_id`, `last_analyzed_at` to services; unique constraints; RLS on all tables
+- [ ] Backend: extract `user_id` from GitHub token, include in all DB writes
+- [ ] Upsert services + endpoints on re-analysis (no duplicate rows)
+- [ ] Recursive service discovery — full depth, `IGNORED_DIRS` only
+- [ ] JS/TS parser — extend `code_parser.py` for `.js`, `.jsx`, `.ts`, `.tsx`
+- [ ] `GET /repos` — proxy GitHub repo list, annotate with `tracked` + `last_analyzed_at`
+- [ ] Frontend `/repos` page — repo browser with Track / Re-analyze buttons
+- [ ] `GET /graph?repo_id=...` scoped per repo + user; graph persists on page refresh
+- [ ] `DELETE /services/{id}` — untrack a repo
 
-### Not in v1 — do not implement
-- [ ] Field-level impact analysis
-- [ ] Log ingestion (Envoy, NGINX, Istio)
-- [ ] gRPC .proto parsing
-- [ ] Multi-language support
-- [ ] GitHub PR comment bot
-- [ ] Per-user data isolation (all analyses go into the same DB for now)
-- [ ] Deprecation-header tracking
-- [ ] Background job processing
+### Not in v2 — do not implement
+- [ ] Field-level impact analysis (v3)
+- [ ] Log ingestion (Envoy, NGINX, Istio) (v3)
+- [ ] gRPC .proto parsing (v3)
+- [ ] GitHub PR comment bot (v3)
+- [ ] Teams / org-level sharing (v3)
+- [ ] Deprecation tracking (v3)
+- [ ] Background job processing (v3)
 
 ---
 
 ## Sample services (demo graph)
 
-Three fake Python services that produce a meaningful graph when analyzed:
+Live at `github.com/iamaryan07/sample-services` (separate repo, not in this repo).
 
 | Service | Exposes | Calls |
 |---|---|---|
@@ -905,18 +1009,18 @@ Three fake Python services that produce a meaningful graph when analyzed:
 | `payment-service` | `POST /payments/charge`, `GET /payments/{id}` | `GET /users/{id}` |
 | `user-service` | `GET /users/{id}`, `GET /users/profile` | nothing |
 
-Demo flow: point the app at the sample-services repo → `GET /users/{id}` shows 2 consumers (order + payment) → this is the high-risk endpoint to demo impact analysis on.
+Demo flow: Track `iamaryan07/sample-services` → `GET /users/{id}` shows 2 consumers (order + payment).
 
 ---
 
-## What "done" looks like for v1
+## What "done" looks like for v2
 
 1. User visits the deployed app → sees login page
-2. Clicks "Login with GitHub" → authenticates → redirected to /graph
-3. Pastes `github.com/yourname/sample-services` → clicks "Analyze"
-4. Graph renders showing 3 service nodes with edges between them
-5. User clicks `GET /users/{id}` node
-6. Side panel shows: "2 consumers — Order Service (12,400 calls), Payment Service (8,900 calls)"
-7. Relevant nodes highlight in the graph
-8. README has a demo GIF of this exact flow
-9. README has a "Technical decisions" section (Neo4j vs SQL, tree-sitter vs regex, v1 vs v2)
+2. Clicks "Login with GitHub" → authenticates → redirected to /repos
+3. Sees list of their GitHub repos with Track buttons
+4. Clicks Track on `iamaryan07/sample-services`
+5. Graph renders at `/graph?repo=iamaryan07/sample-services`
+6. User refreshes — graph is still there (fetched from DB on mount)
+7. User tracks a second repo — goes to its own separate graph, doesn't mix with the first
+8. User clicks `GET /users/{id}` node → side panel shows 2 consumers
+9. User can Re-analyze to pick up code changes, or untrack to remove the repo

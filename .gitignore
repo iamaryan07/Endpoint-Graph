@@ -45,3 +45,7 @@ Desktop.ini
 .idea/
 *.swp
 *.swo
+
+# ── Docs / notes (local only) ─────────────────────────────────────────────────
+CODEBASE_WALKTHROUGH_v1.md
+CODEBASE_WALKTHROUGH.md
