@@ -47,7 +47,7 @@ Flag anything that contradicts a decision already made:
 | DB access from frontend | Spec tells Next.js to query Supabase directly |
 | ORM usage | Spec imports SQLAlchemy or any ORM |
 | Docker references | Spec mentions Docker or docker-compose |
-| v2 features | Spec implements field-level analysis, log ingestion, gRPC, multi-language |
+| v3 features | Spec implements field-level analysis, log ingestion, gRPC, PR bot, background jobs |
 | Auth method | Spec uses NextAuth instead of Supabase Auth |
 | React Flow SSR | Spec mounts React Flow without `ssr: false` |
 | API calls in components | Spec puts fetch() inside a component instead of `lib/api.js` |
@@ -82,6 +82,9 @@ implement with zero ambiguity. Flag anything vague:
 - Every error case is described (what to raise, what to return)
 - File paths are exact (not "somewhere in the analysis folder")
 - It's clear which router file the route goes into
+- Every DB-touching route lists both `Depends(get_github_token)` AND `Depends(get_current_user_id)`
+- Every DB transaction calls `set_rls_context(conn, user_id)` first
+- Any INSERT into `services`, `endpoints`, or `consumer_edges` includes `ON CONFLICT ... DO UPDATE`
 
 **For frontend specs, check:**
 - Every component has its props listed
@@ -175,7 +178,7 @@ If the user says "fix it" after seeing the report:
 - Do not approve a spec that conflicts with CLAUDE.md decisions
 - Do not approve a spec with vague function signatures
 - Do not approve a spec with missing test cases for obvious error paths
-- Do not approve a spec that references v2 features
+- Do not approve a spec that references v3 features (field-level analysis, log ingestion, gRPC, PR bot, background jobs, teams/sharing)
 - Do not add new features to the spec during a fix — only fix the issues found
 
 ---

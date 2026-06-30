@@ -39,8 +39,8 @@ If the output IS empty (clean working tree): continue to Check 3.
 Derive the branch name from the spec filename:
 - Take the spec filename without the .md extension
 - Add the prefix `feat/`
-- Example: `03-repo-cloner.md` → `feat/03-repo-cloner`
-- Example: `09-frontend-graph.md` → `feat/09-frontend-graph`
+- V1 examples: `03-repo-cloner.md` → `feat/03-repo-cloner`
+- V2 examples: `v2-06-repos-route.md` → `feat/v2-06-repos-route`
 
 Run:
 ```
@@ -132,6 +132,10 @@ Write all code described in the spec. Follow these rules strictly:
 - `yaml.safe_load()` always — never `yaml.load()`
 - Raw asyncpg queries — no SQLAlchemy, no ORM
 - Type hints on every function signature
+- Every DB-touching route must have BOTH: `Depends(get_github_token)` AND `Depends(get_current_user_id)`
+- First line of every `async with pool.acquire() as conn` block: `await set_rls_context(conn, user_id)`
+- `user_id` always comes from `get_current_user_id` (JWT `sub` claim) — never from GitHub API or request body
+- Any INSERT into `services`, `endpoints`, or `consumer_edges` must use `ON CONFLICT ... DO UPDATE`
 
 #### JavaScript rules (from CLAUDE.md)
 - All files are `.js` or `.jsx` — no `.ts` or `.tsx` anywhere
@@ -228,7 +232,7 @@ Reading order:
 - Do not open a new asyncpg connection per request — always use the pool
 - Do not put fetch() calls inside components — always use `lib/api.js`
 - Do not forget `ssr: false` on any component that uses React Flow
-- Do not implement v2 features (field-level analysis, log ingestion, gRPC, multi-language)
+- Do not implement v3 features (field-level analysis, log ingestion, gRPC, PR bot, background jobs, teams/sharing)
 
 ---
 

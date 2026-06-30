@@ -33,14 +33,17 @@ Understand what feature the user is describing. Map it to the right part of the 
 
 ### Step 3 — Determine the spec number and name
 
-List all files currently in `.claude/specs/`. Find the highest existing number. This spec gets the next number.
+List all files currently in `.claude/specs/`. Specs follow two naming conventions:
+- V1 specs: `NN-short-name.md` (e.g. `01-db-schema.md`, `09-frontend-graph.md`)
+- V2 specs: `v2-NN-short-name.md` (e.g. `v2-01-db-migration.md`, `v2-06-repos-route.md`)
 
-If `.claude/specs/` is empty, start at `01`.
+For v2 specs, find the highest existing `v2-NN` number and use the next one.
+Use the `v2-NN` prefix for any spec that is part of the v2 feature set (see CLAUDE.md V2 scope).
 
-Name the file using this format: `NN-short-name.md`
-- `NN` = two digit number, e.g. `01`, `02`, `11`
-- `short-name` = 2-4 words, kebab-case, describes the feature
-- Examples: `01-db-schema.md`, `05-treesitter-extractor.md`, `09-frontend-graph.md`
+Name the file:
+- V2: `v2-NN-short-name.md` where `NN` is two digits (e.g. `v2-07`, `v2-08`)
+- `short-name` = 2-4 words, kebab-case
+- Examples: `v2-07-repos-page.md`, `v2-08-scoped-graph.md`, `v2-11-endpoint-nodes.md`
 
 ### Step 4 — Write the spec file
 
@@ -136,10 +139,10 @@ Every item must be true before this spec is considered complete.
 
 - Do not write any implementation code — only the spec file
 - Do not skip Step 1 (reading CLAUDE.md) even if it feels redundant
-- Do not suggest features that are marked as v2 in CLAUDE.md
+- Do not suggest features that are marked as v3 in CLAUDE.md (field-level analysis, log ingestion, gRPC, PR bot, etc.)
 - Do not use TypeScript, Docker, SQLAlchemy, or any tool not in the stack
 - Do not create a spec for something that conflicts with a key decision in CLAUDE.md
-- Do not number the spec incorrectly — always check existing specs first
+- Do not number the spec incorrectly — always check existing specs first; use `v2-NN` prefix for v2 specs
 - Do not write vague implementation details — every function must have a signature
 
 ---

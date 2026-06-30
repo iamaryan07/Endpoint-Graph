@@ -136,15 +136,42 @@ Check every file against conventions defined in CLAUDE.md.
 | TypeScript syntax | Type annotations, `as Type`, interfaces, `<Type>` generics in .js files |
 | Inline styles | Excessive inline styles where Tailwind classes should be used |
 
-#### v1 scope violations
+#### v3 scope violations (not in v2 — flag if present)
 
-Flag as CRITICAL if any of these v2 features appear in the code:
-- Field-level analysis (`schema_fields`, `field_consumers` tables)
-- Log ingestion (Envoy, NGINX parsing)
+Flag as CRITICAL if any of these v3 features appear in the code:
+- Field-level analysis (`schema_fields`, `field_consumers` tables, field-level tracking)
+- Log ingestion (Envoy, NGINX, Istio parsing)
 - gRPC or .proto file handling
-- Multi-language tree-sitter parsing (anything other than Python)
+- GitHub PR comment bot integration
+- Teams or org-level sharing / multi-user graph views
+- Deprecation tracking
 - Background job processing (Celery, RQ, asyncio.create_task for analysis)
 - NextAuth or any auth library other than Supabase
+
+#### v2 auth conventions
+
+Flag as CRITICAL if any route that touches the DB is missing either dependency:
+- `Depends(get_github_token)` — required for cloning + GitHub API
+- `Depends(get_current_user_id)` — required for JWT verification + user_id extraction
+
+Flag as CRITICAL if `set_rls_context(conn, user_id)` is not the FIRST call inside
+every DB transaction block (`async with pool.acquire() as conn`). Calling it after
+any query defeats RLS enforcement.
+
+Flag as CRITICAL if `user_id` is sourced from anything other than the `sub` claim of
+the verified Supabase JWT — e.g. from GitHub API user data, from a request body field,
+or hardcoded. The `get_current_user_id` dependency in `auth.py` is the only valid source.
+
+#### v2 upsert conventions
+
+Flag as CRITICAL if any INSERT into `services`, `endpoints`, or `consumer_edges`
+is missing its `ON CONFLICT ... DO UPDATE` clause — re-analysis must be idempotent,
+not create duplicate rows.
+
+Correct conflict targets per CLAUDE.md:
+- `services`: `ON CONFLICT (user_id, repo_id, name)`
+- `endpoints`: `ON CONFLICT (service_id, method, path)`
+- `consumer_edges`: `ON CONFLICT (caller_service_id, endpoint_id)`
 
 ### Step 6 — Code quality check
 

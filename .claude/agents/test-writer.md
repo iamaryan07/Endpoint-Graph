@@ -196,25 +196,38 @@ async def test_get_consumers_returns_correct_shape():
 
 #### FastAPI route tests
 
-Use `httpx.AsyncClient` with `ASGITransport`:
+Use `httpx.AsyncClient` with `ASGITransport`. Every route requires BOTH auth headers.
+Mock JWT verification so tests don't hit Supabase JWKS.
 
 ```python
 from httpx import AsyncClient, ASGITransport
+from unittest.mock import patch
 from main import app
+
+FAKE_USER_ID = "00000000-0000-0000-0000-000000000001"
 
 @pytest.mark.asyncio
 async def test_impact_analysis_route_returns_200():
-    async with AsyncClient(
-        transport=ASGITransport(app=app),
-        base_url="http://test"
-    ) as client:
-        response = await client.get(
-            "/endpoints/3/impact-analysis",
-            headers={"X-GitHub-Token": "fake-token"}
-        )
+    # Override JWT dependency — returns FAKE_USER_ID without hitting Supabase
+    with patch("auth.get_current_user_id", return_value=FAKE_USER_ID):
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test"
+        ) as client:
+            response = await client.get(
+                "/endpoints/3/impact-analysis",
+                headers={
+                    "X-GitHub-Token": "fake-github-token",
+                    "Authorization": "Bearer fake-jwt",
+                }
+            )
     assert response.status_code == 200
     assert isinstance(response.json(), list)
 ```
+
+Always patch `auth.get_current_user_id` at the module level (not PyJWKClient) so
+FastAPI's dependency injection resolves to `FAKE_USER_ID` without network calls.
+Always include both headers even when the test focuses on business logic, not auth.
 
 ### Step 6 — Write frontend tests (if spec touches frontend)
 

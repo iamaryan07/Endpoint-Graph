@@ -135,7 +135,10 @@ injection point. Trace every input from where it enters to where it is used.
 - `repo_url` from POST /analyze body
 - `endpoint_id` from GET /endpoints/{id}/impact-analysis path param
 - `service_id` from GET /endpoints query param
+- `id` from DELETE /services/{id} path param
+- `repo_id` from GET /graph query param
 - The GitHub token from X-GitHub-Token header
+- The Supabase JWT from Authorization: Bearer header
 
 #### SQL injection
 
@@ -216,29 +219,63 @@ router.push('/graph')  // hardcoded safe destination
 
 ### Step 6 — Authentication and authorisation check
 
-#### Token presence check
+#### Dual-header presence check
 
-Every FastAPI route must check that the X-GitHub-Token header is present
-before doing anything.
+Every FastAPI route that touches the DB requires BOTH auth dependencies from `auth.py`.
 
-Flag as CRITICAL if:
-- Any route that clones a repo or writes to the DB does not call
-  `get_github_token` from `auth.py`
-- The token is made optional (`Optional[str]`) on routes that require it
+Flag as CRITICAL if any DB-touching route is missing either:
+- `Depends(get_github_token)` — verifies X-GitHub-Token header is present
+- `Depends(get_current_user_id)` — verifies Supabase ES256 JWT, extracts `user_id` from `sub` claim
 
 ```python
-# CRITICAL — missing auth dependency
+# CRITICAL — missing both auth dependencies
 @router.post("/analyze")
-async def analyze(request: AnalyzeRequest):  # no token check
+async def analyze(request: AnalyzeRequest):
     ...
 
-# Correct
+# CRITICAL — missing JWT verification (user_id not verified)
 @router.post("/analyze")
 async def analyze(request: AnalyzeRequest, token: str = Depends(get_github_token)):
     ...
+
+# Correct — both dependencies required
+@router.post("/analyze")
+async def analyze(
+    request: AnalyzeRequest,
+    token: str = Depends(get_github_token),
+    user_id: str = Depends(get_current_user_id),
+):
+    ...
 ```
 
-#### Token forwarded correctly
+Flag as CRITICAL if either dependency is made `Optional` on routes that require it.
+
+#### RLS context check
+
+Flag as CRITICAL if `set_rls_context(conn, user_id)` is not the FIRST call inside
+every `async with pool.acquire() as conn` block. Any DB query that runs before
+`set_rls_context` executes without RLS enforcement — a privilege escalation risk.
+
+```python
+# CRITICAL — query runs before RLS context is set
+async with pool.acquire() as conn:
+    rows = await conn.fetch("SELECT * FROM services")
+    await set_rls_context(conn, user_id)  # too late
+
+# Correct — RLS context set first, always
+async with pool.acquire() as conn:
+    await set_rls_context(conn, user_id)
+    rows = await conn.fetch("SELECT * FROM services")
+```
+
+#### user_id source check
+
+Flag as CRITICAL if `user_id` used in any DB write (`INSERT`, `UPDATE`) or
+RLS context call is sourced from anything other than the `sub` claim of the
+verified Supabase JWT — e.g. from the GitHub API, from request body, or hardcoded.
+Only `get_current_user_id` (which calls PyJWKClient to verify ES256) is valid.
+
+#### GitHub token forwarded correctly
 
 Flag as WARNING if the GitHub token is stored anywhere persistent:
 - Written to the DB
@@ -249,7 +286,7 @@ The token should only live in the request scope. Use it, then discard it.
 
 #### Frontend auth guard
 
-Flag as WARNING if any page under `/graph` or similar protected routes
+Flag as WARNING if any page under `/graph`, `/repos`, or other protected routes
 does not check for an active Supabase session before rendering.
 
 ```javascript
@@ -258,13 +295,19 @@ export default function GraphPage() {
   return <DependencyGraph />
 }
 
-// Correct
+// Correct — redirect to /login if no session
 export default function GraphPage() {
   const session = useSession()
   if (!session) redirect('/login')
   return <DependencyGraph />
 }
 ```
+
+#### Frontend token headers check
+
+Flag as WARNING if any `fetch()` call in `lib/api.js` to FastAPI is missing
+either the `X-GitHub-Token` or `Authorization: Bearer` header — both are
+required by every FastAPI route per the auth flow in CLAUDE.md.
 
 ### Step 7 — Data exposure check
 

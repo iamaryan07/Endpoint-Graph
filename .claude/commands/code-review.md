@@ -73,7 +73,7 @@ themselves, but this command also needs it to:
 - Know the API contract to validate against
 - Know the DB schema to validate against
 - Know the auth flow to check for bypasses
-- Know the v1 scope to catch scope creep
+- Know the v2 scope to catch v3 scope creep (field-level analysis, log ingestion, gRPC, PR bot, background jobs)
 
 ### Step 2 — Read the spec
 
