@@ -1,8 +1,15 @@
 import ast
+import os
+import re
 from tree_sitter_languages import get_language, get_parser
 
 PY_LANGUAGE = get_language("python")
 parser = get_parser("python")
+
+JS_LANGUAGE = get_language("javascript")
+TS_LANGUAGE = get_language("typescript")
+js_parser = get_parser("javascript")
+ts_parser = get_parser("typescript")
 
 DECORATOR_QUERY = PY_LANGUAGE.query("""
 (decorated_definition
@@ -36,6 +43,36 @@ def _node_string_value(node) -> str | None:
         return ast.literal_eval(raw)
     except Exception:
         return None
+
+
+def _get_js_parser(file_path: str):
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext in {".ts", ".tsx"}:
+        return TS_LANGUAGE, ts_parser
+    return JS_LANGUAGE, js_parser
+
+
+def _nextjs_api_path(file_path: str) -> str | None:
+    normalized = file_path.replace("\\", "/")
+    marker = "/app/"
+    idx = normalized.find(marker)
+    if idx == -1:
+        return None
+    after = normalized[idx + len(marker):]
+    for suffix in ("/route.js", "/route.jsx", "/route.ts", "/route.tsx"):
+        if after.endswith(suffix):
+            after = after[: -len(suffix)]
+            break
+    else:
+        for bare in ("route.js", "route.jsx", "route.ts", "route.tsx"):
+            if after == bare:
+                after = ""
+                break
+        else:
+            return None
+    after = re.sub(r"\[\.\.\.([^\]]+)\]", r"{\1}", after)
+    after = re.sub(r"\[([^\]]+)\]", r"{\1}", after)
+    return "/" + after if after else "/"
 
 
 def extract_route_decorators(file_path: str) -> list[dict]:
@@ -88,3 +125,144 @@ def extract_http_calls(file_path: str) -> list[dict]:
         return results
     except Exception:
         return []
+
+
+def extract_js_routes(file_path: str) -> list[dict]:
+    try:
+        lang, p = _get_js_parser(file_path)
+        source = open(file_path, "rb").read()
+        tree = p.parse(source)
+        results = []
+
+        # Case A — Express-style route declarations
+        # Matches any object method call whose method is get/post/put/delete and
+        # whose first argument is a string literal. This is intentionally broad —
+        # Express apps use arbitrary variable names (app, router, api, v1, etc.)
+        # so restricting by object name would miss valid routes.
+        express_query = lang.query("""
+(call_expression
+  function: (member_expression
+    object: (identifier)
+    property: (property_identifier) @method)
+  arguments: (arguments
+    (string) @path))
+""")
+        for _, match in express_query.matches(tree.root_node):
+            method_node = match.get("method")
+            path_node = match.get("path")
+            if method_node is None or path_node is None:
+                continue
+            method = method_node.text.decode("utf-8").upper()
+            if method not in {"GET", "POST", "PUT", "DELETE"}:
+                continue
+            raw = path_node.text.decode("utf-8")
+            if raw.startswith("`"):
+                continue
+            try:
+                path_value = ast.literal_eval(raw)
+            except Exception:
+                continue
+            if not isinstance(path_value, str):
+                continue
+            results.append({"method": method, "path": path_value, "spec_source": "decorator_js"})
+
+        # Case B — Next.js App Router file-based routes
+        api_path = _nextjs_api_path(file_path)
+        if api_path is not None:
+            fn_query = lang.query("""
+(export_statement
+  declaration: (function_declaration
+    name: (identifier) @name))
+(export_statement
+  declaration: (lexical_declaration
+    (variable_declarator
+      name: (identifier) @name)))
+""")
+            for _, match in fn_query.matches(tree.root_node):
+                name_node = match.get("name")
+                if name_node is None:
+                    continue
+                name_text = name_node.text.decode("utf-8")
+                if name_text in {"GET", "POST", "PUT", "DELETE"}:
+                    results.append({"method": name_text, "path": api_path, "spec_source": "nextjs_route"})
+
+        return results
+    except Exception:
+        return []
+
+
+def extract_js_http_calls(file_path: str) -> list[str]:
+    try:
+        lang, p = _get_js_parser(file_path)
+        source = open(file_path, "rb").read()
+        tree = p.parse(source)
+        results = []
+
+        # fetch("url")
+        fetch_query = lang.query("""
+(call_expression
+  function: (identifier) @fn
+  arguments: (arguments
+    (string) @url))
+""")
+        for _, match in fetch_query.matches(tree.root_node):
+            fn_node = match.get("fn")
+            url_node = match.get("url")
+            if fn_node is None or url_node is None:
+                continue
+            if fn_node.text.decode("utf-8") != "fetch":
+                continue
+            raw = url_node.text.decode("utf-8")
+            if raw.startswith("`"):
+                continue
+            try:
+                url = ast.literal_eval(raw)
+            except Exception:
+                continue
+            if isinstance(url, str):
+                results.append(url)
+
+        # axios.get/post/put/delete("url")
+        axios_query = lang.query("""
+(call_expression
+  function: (member_expression
+    object: (identifier) @lib
+    property: (property_identifier) @method)
+  arguments: (arguments
+    (string) @url))
+""")
+        for _, match in axios_query.matches(tree.root_node):
+            lib_node = match.get("lib")
+            method_node = match.get("method")
+            url_node = match.get("url")
+            if lib_node is None or method_node is None or url_node is None:
+                continue
+            if lib_node.text.decode("utf-8") != "axios":
+                continue
+            if method_node.text.decode("utf-8") not in {"get", "post", "put", "delete"}:
+                continue
+            raw = url_node.text.decode("utf-8")
+            if raw.startswith("`"):
+                continue
+            try:
+                url = ast.literal_eval(raw)
+            except Exception:
+                continue
+            if isinstance(url, str):
+                results.append(url)
+
+        return results
+    except Exception:
+        return []
+
+
+def detect_service_language(folder_path: str) -> str:
+    for root, dirs, files in os.walk(folder_path):
+        for f in files:
+            if f.endswith(".py"):
+                return "python"
+    for root, dirs, files in os.walk(folder_path):
+        for f in files:
+            if f.endswith((".js", ".jsx", ".ts", ".tsx")):
+                return "javascript"
+    return "unknown"
