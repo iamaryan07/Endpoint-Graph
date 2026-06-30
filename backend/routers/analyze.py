@@ -7,12 +7,16 @@ from database import get_pool
 from auth import get_github_token, get_current_user_id, set_rls_context
 from models import AnalyzeRequest, AnalyzeResponse
 from analysis.cloner import clone_repo, delete_repo
-from analysis.scanner import find_service_folders
+from analysis.scanner import find_service_folders, IGNORED_DIRS
 from analysis.spec_parser import parse_service
-from analysis.code_parser import extract_route_decorators, extract_http_calls
+from analysis.code_parser import (
+    extract_route_decorators,
+    extract_http_calls,
+    extract_js_routes,
+    extract_js_http_calls,
+    detect_service_language,
+)
 from analysis.url_matcher import match_url_to_endpoint
-
-router = APIRouter()
 
 
 def repo_id_from_url(repo_url: str) -> str:
@@ -51,6 +55,21 @@ def _extract_path(url: str) -> str | None:
     return parsed.path if parsed.path else None
 
 
+def _is_in_ignored_dir(file_path: str, root: str) -> bool:
+    """Return True if any path component between root and file_path is in IGNORED_DIRS."""
+    rel = os.path.relpath(file_path, root)
+    return any(part in IGNORED_DIRS for part in rel.split(os.sep))
+
+
+UPSERT_EDGE_SQL = """INSERT INTO consumer_edges
+    (caller_service_id, endpoint_id, last_seen_at, call_count, source)
+VALUES ($1, $2, NOW(), 1, $3)
+ON CONFLICT (caller_service_id, endpoint_id)
+DO UPDATE SET last_seen_at = NOW(), source = EXCLUDED.source"""
+
+router = APIRouter()
+
+
 @router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(
     request: AnalyzeRequest,
@@ -86,8 +105,11 @@ async def analyze(
                         discovered = result["endpoints"]
                     else:
                         discovered = []
-                        for py_file in glob.glob(os.path.join(folder_path, "*.py")):
+                        # Python route decorators
+                        for py_file in glob.glob(os.path.join(folder_path, "**", "*.py"), recursive=True):
                             if not _safe_path(py_file, tmp_dir):
+                                continue
+                            if _is_in_ignored_dir(py_file, folder_path):
                                 continue
                             for ep in extract_route_decorators(py_file):
                                 discovered.append({
@@ -95,14 +117,24 @@ async def analyze(
                                     "path": ep["path"],
                                     "spec_source": "decorator",
                                 })
+                        # JS/TS route decorators and Next.js file-based routes
+                        for pattern in ("**/*.js", "**/*.jsx", "**/*.ts", "**/*.tsx"):
+                            for js_file in glob.glob(os.path.join(folder_path, pattern), recursive=True):
+                                if not _safe_path(js_file, tmp_dir):
+                                    continue
+                                if _is_in_ignored_dir(js_file, folder_path):
+                                    continue
+                                for ep in extract_js_routes(js_file):
+                                    discovered.append(ep)
 
+                    lang = detect_service_language(folder_path)
                     row = await conn.fetchrow(
                         """INSERT INTO services (name, language, repo_url, user_id, repo_id, last_analyzed_at)
                            VALUES ($1, $2, $3, $4, $5, NOW())
                            ON CONFLICT (user_id, repo_id, name)
                            DO UPDATE SET last_analyzed_at = NOW(), language = EXCLUDED.language
                            RETURNING id""",
-                        service_name, "python", request.repo_url, user_id, repo_id,
+                        service_name, lang, request.repo_url, user_id, repo_id,
                     )
                     service_id = row["id"]
                     services_count += 1
@@ -119,7 +151,6 @@ async def analyze(
                             service_id, endpoint["method"], endpoint["path"], endpoint["spec_source"],
                         )
                         if ep_row is None:
-                            # DO NOTHING returns no row — fetch the existing id
                             ep_row = await conn.fetchrow(
                                 "SELECT id FROM endpoints WHERE service_id=$1 AND method=$2 AND path=$3",
                                 service_id, endpoint["method"], endpoint["path"],
@@ -141,37 +172,47 @@ async def analyze(
             async with conn.transaction():
                 await set_rls_context(conn, user_id)
                 for service_name, service_id, folder_path in service_records:
-                    py_files = glob.glob(os.path.join(folder_path, "*.py"))
-                    for py_file in py_files:
+                    # Python HTTP calls
+                    for py_file in glob.glob(os.path.join(folder_path, "**", "*.py"), recursive=True):
                         if not _safe_path(py_file, tmp_dir):
                             continue
-                        calls = extract_http_calls(py_file)
-                        for call in calls:
+                        if _is_in_ignored_dir(py_file, folder_path):
+                            continue
+                        for call in extract_http_calls(py_file):
                             url_path = _extract_path(call["url"])
                             if not url_path:
                                 continue
                             matched_path = match_url_to_endpoint(url_path, known_paths)
                             if matched_path is None:
                                 continue
-                            # If multiple endpoints share the same path (different methods),
-                            # the first match is used — v1 tracks service-level dependencies.
                             matched_endpoint = next(
                                 (e for e in known_endpoints if e["path"] == matched_path), None
                             )
-                            if matched_endpoint is None:
+                            if matched_endpoint is None or matched_endpoint["service_id"] == service_id:
                                 continue
-                            endpoint_id = matched_endpoint["id"]
-                            if matched_endpoint["service_id"] == service_id:
-                                continue
-                            await conn.execute(
-                                """INSERT INTO consumer_edges
-                                       (caller_service_id, endpoint_id, last_seen_at, call_count, source)
-                                   VALUES ($1, $2, NOW(), 1, $3)
-                                   ON CONFLICT (caller_service_id, endpoint_id)
-                                   DO UPDATE SET last_seen_at = NOW(), source = EXCLUDED.source""",
-                                service_id, endpoint_id, 'static',
-                            )
+                            await conn.execute(UPSERT_EDGE_SQL, service_id, matched_endpoint["id"], "static")
                             edges_count += 1
+                    # JS/TS HTTP calls (extract_js_http_calls returns list[str], not list[dict])
+                    for pattern in ("**/*.js", "**/*.jsx", "**/*.ts", "**/*.tsx"):
+                        for js_file in glob.glob(os.path.join(folder_path, pattern), recursive=True):
+                            if not _safe_path(js_file, tmp_dir):
+                                continue
+                            if _is_in_ignored_dir(js_file, folder_path):
+                                continue
+                            for url in extract_js_http_calls(js_file):
+                                url_path = _extract_path(url)
+                                if not url_path:
+                                    continue
+                                matched_path = match_url_to_endpoint(url_path, known_paths)
+                                if matched_path is None:
+                                    continue
+                                matched_endpoint = next(
+                                    (e for e in known_endpoints if e["path"] == matched_path), None
+                                )
+                                if matched_endpoint is None or matched_endpoint["service_id"] == service_id:
+                                    continue
+                                await conn.execute(UPSERT_EDGE_SQL, service_id, matched_endpoint["id"], "static")
+                                edges_count += 1
 
     except ValueError:
         raise HTTPException(

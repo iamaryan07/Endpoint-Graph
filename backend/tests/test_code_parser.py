@@ -1,5 +1,11 @@
 import pytest
-from analysis.code_parser import extract_route_decorators, extract_http_calls
+from analysis.code_parser import (
+    extract_route_decorators,
+    extract_http_calls,
+    extract_js_routes,
+    extract_js_http_calls,
+    detect_service_language,
+)
 
 
 # ── extract_route_decorators ───────────────────────────────────────────────────
@@ -147,3 +153,210 @@ def test_extract_invalid_python(tmp_path):
     f.write_text("def broken(:\n    pass\n")
     assert extract_route_decorators(str(f)) == []
     assert extract_http_calls(str(f)) == []
+
+
+# ── extract_js_routes — Express ────────────────────────────────────────────────
+
+def test_js_express_get(tmp_path):
+    f = tmp_path / "routes.js"
+    f.write_text("const handler = () => {};\napp.get('/users', handler);\n")
+    result = extract_js_routes(str(f))
+    assert {"method": "GET", "path": "/users", "spec_source": "decorator_js"} in result
+
+
+def test_js_express_post(tmp_path):
+    f = tmp_path / "routes.js"
+    f.write_text("router.post('/orders', handler);\n")
+    result = extract_js_routes(str(f))
+    assert {"method": "POST", "path": "/orders", "spec_source": "decorator_js"} in result
+
+
+def test_js_express_put(tmp_path):
+    f = tmp_path / "routes.js"
+    f.write_text("app.put('/items/:id', handler);\n")
+    result = extract_js_routes(str(f))
+    assert {"method": "PUT", "path": "/items/:id", "spec_source": "decorator_js"} in result
+
+
+def test_js_express_delete(tmp_path):
+    f = tmp_path / "routes.js"
+    f.write_text("app.delete('/users/:id', handler);\n")
+    result = extract_js_routes(str(f))
+    assert {"method": "DELETE", "path": "/users/:id", "spec_source": "decorator_js"} in result
+
+
+def test_js_express_unknown_method(tmp_path):
+    f = tmp_path / "routes.js"
+    f.write_text("app.patch('/x', handler);\n")
+    result = extract_js_routes(str(f))
+    assert result == []
+
+
+def test_js_express_template_literal_path_skipped(tmp_path):
+    f = tmp_path / "routes.js"
+    f.write_text("const id = 1;\napp.get(`/users/${id}`, h);\n")
+    result = extract_js_routes(str(f))
+    # template literals are template_string nodes and won't match (string) in the query
+    assert result == []
+
+
+def test_ts_express_route(tmp_path):
+    f = tmp_path / "routes.ts"
+    f.write_text("router.get('/payments/:id', handler);\n")
+    result = extract_js_routes(str(f))
+    assert {"method": "GET", "path": "/payments/:id", "spec_source": "decorator_js"} in result
+
+
+# ── extract_js_routes — Next.js ────────────────────────────────────────────────
+
+def test_nextjs_get_route(tmp_path):
+    route_dir = tmp_path / "app" / "api" / "users"
+    route_dir.mkdir(parents=True)
+    f = route_dir / "route.js"
+    f.write_text(
+        "export async function GET(req) { return new Response('ok'); }\n"
+        "export async function POST(req) { return new Response('created'); }\n"
+    )
+    result = extract_js_routes(str(f))
+    assert {"method": "GET", "path": "/api/users", "spec_source": "nextjs_route"} in result
+    assert {"method": "POST", "path": "/api/users", "spec_source": "nextjs_route"} in result
+
+
+def test_nextjs_dynamic_route(tmp_path):
+    route_dir = tmp_path / "app" / "api" / "users" / "[id]"
+    route_dir.mkdir(parents=True)
+    f = route_dir / "route.js"
+    f.write_text("export function GET(req) { return new Response('ok'); }\n")
+    result = extract_js_routes(str(f))
+    assert {"method": "GET", "path": "/api/users/{id}", "spec_source": "nextjs_route"} in result
+
+
+def test_nextjs_catch_all_route(tmp_path):
+    route_dir = tmp_path / "app" / "api" / "[...slug]"
+    route_dir.mkdir(parents=True)
+    f = route_dir / "route.ts"
+    f.write_text("export function GET() { return new Response('ok'); }\n")
+    result = extract_js_routes(str(f))
+    assert {"method": "GET", "path": "/api/{slug}", "spec_source": "nextjs_route"} in result
+
+
+def test_nextjs_non_route_file_skipped(tmp_path):
+    helpers_dir = tmp_path / "app" / "api" / "users"
+    helpers_dir.mkdir(parents=True)
+    f = helpers_dir / "helpers.js"
+    f.write_text("export function helper() { return 42; }\n")
+    result = extract_js_routes(str(f))
+    assert result == []
+
+
+def test_nextjs_no_http_exports(tmp_path):
+    route_dir = tmp_path / "app" / "api" / "users"
+    route_dir.mkdir(parents=True)
+    f = route_dir / "route.js"
+    f.write_text("export function helper() { return 42; }\n")
+    result = extract_js_routes(str(f))
+    assert result == []
+
+
+# ── extract_js_http_calls ──────────────────────────────────────────────────────
+
+def test_js_fetch_call(tmp_path):
+    f = tmp_path / "client.js"
+    f.write_text('fetch("http://user-service/users/1");\n')
+    result = extract_js_http_calls(str(f))
+    assert result == ["http://user-service/users/1"]
+
+
+def test_js_axios_get(tmp_path):
+    f = tmp_path / "client.js"
+    f.write_text('axios.get("http://svc/users/1");\n')
+    result = extract_js_http_calls(str(f))
+    assert "http://svc/users/1" in result
+
+
+def test_js_axios_post(tmp_path):
+    f = tmp_path / "client.js"
+    f.write_text('axios.post("http://svc/orders");\n')
+    result = extract_js_http_calls(str(f))
+    assert "http://svc/orders" in result
+
+
+def test_js_axios_delete(tmp_path):
+    f = tmp_path / "client.js"
+    f.write_text('axios.delete("http://svc/items/1");\n')
+    result = extract_js_http_calls(str(f))
+    assert "http://svc/items/1" in result
+
+
+def test_js_fetch_template_literal_skipped(tmp_path):
+    f = tmp_path / "client.js"
+    f.write_text("const id = 1;\nfetch(`http://svc/users/${id}`);\n")
+    result = extract_js_http_calls(str(f))
+    assert result == []
+
+
+def test_js_fetch_variable_url_skipped(tmp_path):
+    f = tmp_path / "client.js"
+    f.write_text('const url = "http://svc";\nfetch(url);\n')
+    result = extract_js_http_calls(str(f))
+    assert result == []
+
+
+def test_js_multiple_http_calls(tmp_path):
+    f = tmp_path / "client.js"
+    f.write_text(
+        'fetch("http://user-service/users/1");\n'
+        'axios.get("http://order-service/orders");\n'
+    )
+    result = extract_js_http_calls(str(f))
+    assert "http://user-service/users/1" in result
+    assert "http://order-service/orders" in result
+
+
+def test_ts_fetch_call(tmp_path):
+    f = tmp_path / "client.ts"
+    f.write_text('fetch("http://svc/path");\n')
+    result = extract_js_http_calls(str(f))
+    assert "http://svc/path" in result
+
+
+def test_js_http_calls_no_calls(tmp_path):
+    f = tmp_path / "client.js"
+    f.write_text("function compute(x) { return x * 2; }\n")
+    result = extract_js_http_calls(str(f))
+    assert result == []
+
+
+def test_js_routes_file_not_found():
+    assert extract_js_routes("/nonexistent.js") == []
+
+
+def test_js_http_calls_file_not_found():
+    assert extract_js_http_calls("/nonexistent.ts") == []
+
+
+# ── detect_service_language ────────────────────────────────────────────────────
+
+def test_detect_language_python(tmp_path):
+    (tmp_path / "main.py").write_text("print('hello')\n")
+    assert detect_service_language(str(tmp_path)) == "python"
+
+
+def test_detect_language_javascript(tmp_path):
+    (tmp_path / "index.js").write_text("console.log('hello');\n")
+    assert detect_service_language(str(tmp_path)) == "javascript"
+
+
+def test_detect_language_unknown(tmp_path):
+    assert detect_service_language(str(tmp_path)) == "unknown"
+
+
+def test_detect_language_python_wins(tmp_path):
+    (tmp_path / "main.py").write_text("print('hello')\n")
+    (tmp_path / "index.js").write_text("console.log('hello');\n")
+    assert detect_service_language(str(tmp_path)) == "python"
+
+
+def test_detect_language_ts_counts_as_javascript(tmp_path):
+    (tmp_path / "server.ts").write_text("console.log('hello');\n")
+    assert detect_service_language(str(tmp_path)) == "javascript"
