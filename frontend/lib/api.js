@@ -1,9 +1,13 @@
 import { supabase } from './supabase'
 
-async function getGitHubToken() {
+async function getAuthHeaders() {
   const { data: { session } } = await supabase.auth.getSession()
-  if (!session?.provider_token) throw new Error('No GitHub token — please log in again')
-  return session.provider_token
+  if (!session?.provider_token || !session?.access_token)
+    throw new Error('Session expired — please log in again')
+  return {
+    'X-GitHub-Token': session.provider_token,
+    'Authorization': `Bearer ${session.access_token}`,
+  }
 }
 
 async function extractError(res) {
@@ -19,43 +23,56 @@ async function extractError(res) {
 }
 
 export async function triggerAnalysis(repoUrl) {
-  const token = await getGitHubToken()
+  const headers = await getAuthHeaders()
   const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/analyze`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-GitHub-Token': token,
-    },
+    headers: { 'Content-Type': 'application/json', ...headers },
     body: JSON.stringify({ repo_url: repoUrl }),
   })
   if (!res.ok) throw new Error(await extractError(res))
   return res.json()
 }
 
-export async function fetchGraph() {
-  const token = await getGitHubToken()
-  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/graph`, {
-    headers: { 'X-GitHub-Token': token },
-  })
+export async function fetchGraph(repoId = null) {
+  const headers = await getAuthHeaders()
+  const url = repoId
+    ? `${process.env.NEXT_PUBLIC_API_URL}/graph?repo_id=${encodeURIComponent(repoId)}`
+    : `${process.env.NEXT_PUBLIC_API_URL}/graph`
+  const res = await fetch(url, { headers })
   if (!res.ok) throw new Error(await extractError(res))
   return res.json()
 }
 
 export async function fetchServices() {
-  const token = await getGitHubToken()
-  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/services`, {
-    headers: { 'X-GitHub-Token': token },
-  })
+  const headers = await getAuthHeaders()
+  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/services`, { headers })
   if (!res.ok) throw new Error(await extractError(res))
   return res.json()
 }
 
 export async function fetchImpactAnalysis(endpointId) {
-  const token = await getGitHubToken()
+  const headers = await getAuthHeaders()
   const res = await fetch(
     `${process.env.NEXT_PUBLIC_API_URL}/endpoints/${endpointId}/impact-analysis`,
-    { headers: { 'X-GitHub-Token': token } }
+    { headers }
   )
+  if (!res.ok) throw new Error(await extractError(res))
+  return res.json()
+}
+
+export async function fetchUserRepos() {
+  const headers = await getAuthHeaders()
+  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/repos`, { headers })
+  if (!res.ok) throw new Error(await extractError(res))
+  return res.json()
+}
+
+export async function deleteService(serviceId) {
+  const headers = await getAuthHeaders()
+  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/services/${serviceId}`, {
+    method: 'DELETE',
+    headers,
+  })
   if (!res.ok) throw new Error(await extractError(res))
   return res.json()
 }

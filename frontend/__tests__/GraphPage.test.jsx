@@ -2,6 +2,14 @@ import '@testing-library/jest-dom'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import GraphPage from '@/app/graph/page'
 
+jest.mock('@/lib/supabase', () => ({
+  supabase: {
+    auth: {
+      getSession: jest.fn().mockResolvedValue({ data: { session: null } }),
+    },
+  },
+}))
+
 jest.mock('@/components/AuthGuard', () => ({
   __esModule: true,
   default: function MockAuthGuard({ children }) {

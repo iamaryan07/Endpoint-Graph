@@ -34,6 +34,9 @@ test('test_repoinput_calls_onAnalysisComplete_after_success', async () => {
 
   render(<RepoInput onAnalysisComplete={onAnalysisComplete} />)
 
+  fireEvent.change(screen.getByPlaceholderText('github.com/owner/repo'), {
+    target: { value: 'github.com/user/repo' },
+  })
   fireEvent.click(screen.getByText('Analyze'))
 
   await waitFor(() => {
@@ -47,10 +50,14 @@ test('test_repoinput_shows_error_on_failure', async () => {
 
   render(<RepoInput onAnalysisComplete={onAnalysisComplete} />)
 
+  fireEvent.change(screen.getByPlaceholderText('github.com/owner/repo'), {
+    target: { value: 'github.com/user/repo' },
+  })
   fireEvent.click(screen.getByText('Analyze'))
 
   await waitFor(() => {
-    expect(screen.getByText('clone failed')).toBeInTheDocument()
+    const input = screen.getByPlaceholderText('github.com/owner/repo')
+    expect(input.className).toContain('border-red-600')
   })
   expect(onAnalysisComplete).not.toHaveBeenCalled()
 })
@@ -60,9 +67,12 @@ test('test_repoinput_disables_button_while_loading', async () => {
 
   render(<RepoInput onAnalysisComplete={jest.fn()} />)
 
+  fireEvent.change(screen.getByPlaceholderText('github.com/owner/repo'), {
+    target: { value: 'github.com/user/repo' },
+  })
   fireEvent.click(screen.getByText('Analyze'))
 
   await waitFor(() => {
-    expect(screen.getByText('Analyze')).toBeDisabled()
+    expect(screen.getByText('Running…')).toBeDisabled()
   })
 })

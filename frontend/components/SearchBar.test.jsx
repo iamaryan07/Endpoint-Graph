@@ -3,13 +3,13 @@ import SearchBar from './SearchBar'
 
 test('renders_input_with_placeholder', () => {
   render(<SearchBar value="" onChange={jest.fn()} />)
-  expect(screen.getByPlaceholderText('Search endpoints…')).toBeInTheDocument()
+  expect(screen.getByPlaceholderText('Filter endpoints…')).toBeInTheDocument()
 })
 
 test('calls_onChange_on_keystroke', () => {
   const onChange = jest.fn()
   render(<SearchBar value="" onChange={onChange} />)
-  const input = screen.getByPlaceholderText('Search endpoints…')
+  const input = screen.getByPlaceholderText('Filter endpoints…')
   fireEvent.change(input, { target: { value: 'users' } })
   expect(onChange).toHaveBeenCalledWith('users')
 })
