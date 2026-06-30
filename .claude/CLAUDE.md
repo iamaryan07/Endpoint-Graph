@@ -384,225 +384,51 @@ FastAPI uses `PyJWKClient` which fetches the JWKS endpoint once, caches the key 
 
 ### Frontend auth setup
 
-```javascript
-// lib/supabase.js — auth client ONLY, never used for DB queries
-import { createClient } from '@supabase/supabase-js'
+- `lib/supabase.js` — `createClient(NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY)`. Used for auth only, never for DB queries.
+- `app/login/page.js` — calls `supabase.auth.signInWithOAuth({ provider: 'github', options: { scopes: 'repo', redirectTo: .../auth/callback } })`
+- `app/auth/callback/route.js` — calls `supabase.auth.exchangeCodeForSession(code)` then redirects to `/repos`
 
-export const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-)
-```
+`lib/api.js` attaches both auth headers to every FastAPI request. All functions (`fetchUserRepos`, `triggerAnalysis`, `fetchGraph`, `fetchImpactAnalysis`, `deleteService`) follow the same pattern:
 
 ```javascript
-// app/login/page.js
-'use client'
-import { supabase } from '@/lib/supabase'
-
-export default function LoginPage() {
-  const login = async () => {
-    await supabase.auth.signInWithOAuth({
-      provider: 'github',
-      options: {
-        scopes: 'repo',   // 'repo' scope = access to private repos
-        redirectTo: `${window.location.origin}/auth/callback`
-      }
-    })
-  }
-
-  return <button onClick={login}>Login with GitHub</button>
-}
-```
-
-```javascript
-// app/auth/callback/route.js — Next.js route handler
-import { supabase } from '@/lib/supabase'
-import { NextResponse } from 'next/server'
-
-export async function GET(request) {
-  const { searchParams } = new URL(request.url)
-  const code = searchParams.get('code')
-  await supabase.auth.exchangeCodeForSession(code)
-  return NextResponse.redirect(new URL('/repos', request.url))
-}
-```
-
-```javascript
-// lib/api.js — attach both auth headers to every FastAPI request
-import { supabase } from './supabase'
-
-// Returns both headers required by every FastAPI route
+// lib/api.js — every FastAPI call uses this
 async function getAuthHeaders() {
   const { data: { session } } = await supabase.auth.getSession()
   return {
-    'X-GitHub-Token': session?.provider_token,   // for git clone + GitHub API
-    'Authorization': `Bearer ${session?.access_token}`, // for JWT verification + RLS
-  }
-}
-
-export async function fetchUserRepos() {
-  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/repos`, {
-    headers: await getAuthHeaders()
-  })
-  if (!res.ok) throw new Error(await extractError(res))
-  return res.json()  // [{ name, full_name, private, updated_at, tracked, last_analyzed_at }]
-}
-
-export async function triggerAnalysis(repoUrl) {
-  const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/analyze`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...await getAuthHeaders()
-    },
-    body: JSON.stringify({ repo_url: repoUrl })
-  })
-  if (!res.ok) throw new Error(await extractError(res))
-  return res.json()
-}
-
-export async function fetchGraph(repoId) {
-  const res = await fetch(
-    `${process.env.NEXT_PUBLIC_API_URL}/graph?repo_id=${encodeURIComponent(repoId)}`,
-    { headers: await getAuthHeaders() }
-  )
-  if (!res.ok) throw new Error(await extractError(res))
-  return res.json()
-}
-
-export async function fetchImpactAnalysis(endpointId) {
-  const res = await fetch(
-    `${process.env.NEXT_PUBLIC_API_URL}/endpoints/${endpointId}/impact-analysis`,
-    { headers: await getAuthHeaders() }
-  )
-  if (!res.ok) throw new Error(await extractError(res))
-  return res.json()
-}
-
-export async function deleteService(serviceId) {
-  const res = await fetch(
-    `${process.env.NEXT_PUBLIC_API_URL}/services/${serviceId}`,
-    { method: 'DELETE', headers: await getAuthHeaders() }
-  )
-  if (!res.ok) throw new Error(await extractError(res))
-}
-
-async function extractError(res) {
-  const text = await res.text()
-  try {
-    const json = JSON.parse(text)
-    if (typeof json.detail === 'string') return json.detail
-    if (Array.isArray(json.detail)) return json.detail.map((e) => e.msg ?? String(e)).join(', ')
-    return text
-  } catch {
-    return text
+    'X-GitHub-Token': session?.provider_token,        // for git clone + GitHub API
+    'Authorization': `Bearer ${session?.access_token}` // for JWT verification + RLS
   }
 }
 ```
+
+No inline `fetch()` in components or pages — every call goes through `lib/api.js`.
 
 ### Backend JWT verification + RLS context
 
-```python
-# auth.py
-import os, json
-import jwt  # PyJWT
-from jwt import PyJWKClient
-from fastapi import Header, HTTPException
-
-# JWKS client fetches https://[ref].supabase.co/auth/v1/.well-known/jwks.json
-# once at startup and caches keys — handles key rotation automatically
-_jwks_client = PyJWKClient(os.getenv("SUPABASE_JWKS_URL"))
-
-async def get_github_token(x_github_token: str = Header(alias="X-GitHub-Token")) -> str:
-    if not x_github_token:
-        raise HTTPException(status_code=401, detail="GitHub token required")
-    return x_github_token
-
-async def get_current_user_id(authorization: str = Header()) -> str:
-    """Verify Supabase ES256 JWT via JWKS, return the Supabase user UUID (sub claim)."""
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Missing Bearer token")
-    token = authorization[7:]
-    try:
-        signing_key = _jwks_client.get_signing_key_from_jwt(token)
-        payload = jwt.decode(
-            token,
-            signing_key.key,
-            algorithms=["ES256"],
-            audience="authenticated",
-        )
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.InvalidTokenError as e:
-        raise HTTPException(status_code=401, detail=f"Invalid token: {e}")
-    return payload["sub"]  # Supabase UUID — matches auth.users.id and services.user_id
-
-async def set_rls_context(conn, user_id: str) -> None:
-    """Set JWT claims + role for this transaction so RLS auth.uid() is enforced."""
-    claims = json.dumps({"sub": user_id, "role": "authenticated"})
-    await conn.execute("SELECT set_config('request.jwt.claims', $1, true)", claims)
-    await conn.execute("SELECT set_config('role', 'authenticated', true)")
-```
+`auth.py` exposes three FastAPI dependencies used on every DB-touching route:
 
 ```python
-# routers/analyze.py — both dependencies required on every DB-touching route
-from fastapi import APIRouter, Depends
-from auth import get_github_token, get_current_user_id, set_rls_context
-from database import get_pool
-from analysis.cloner import clone_repo
-
-router = APIRouter()
-
-@router.post("/analyze")
-async def analyze(
-    request: AnalyzeRequest,
-    token: str = Depends(get_github_token),
-    user_id: str = Depends(get_current_user_id),
-):
-    tmp_dir = clone_repo(request.repo_url, token)
-    pool = await get_pool()
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            await set_rls_context(conn, user_id)  # must be first — enables RLS for this tx
-            # now run all DB writes; auth.uid() returns user_id; RLS enforces isolation
+async def get_github_token(x_github_token: str = Header(alias="X-GitHub-Token")) -> str: ...
+async def get_current_user_id(authorization: str = Header()) -> str: ...
+    # verifies ES256 JWT via PyJWKClient(SUPABASE_JWKS_URL), returns payload["sub"]
+async def set_rls_context(conn, user_id: str) -> None: ...
+    # set_config('request.jwt.claims', {"sub": user_id, "role": "authenticated"})
+    # set_config('role', 'authenticated')
+    # — must be called first in every transaction before any DB query
 ```
+
+Every route that touches the DB: `Depends(get_github_token)` + `Depends(get_current_user_id)` + `await set_rls_context(conn, user_id)` as the first line of the transaction.
 
 ---
 
 ## Repo cloning
 
-```python
-# analysis/cloner.py
-import subprocess, tempfile, uuid, shutil, re, os
+`analysis/cloner.py` — `clone_repo(repo_url, github_token) -> str` / `delete_repo(tmp_dir) -> None`
 
-def clone_repo(repo_url: str, github_token: str) -> str:
-    repo_url = repo_url.strip()
-    repo_url = re.sub(r'^https?://', '', repo_url)
-    if not repo_url.startswith('github.com/'):
-        raise ValueError(f"Invalid GitHub URL: {repo_url}")
-
-    auth_url = f"https://{github_token}@{repo_url}"
-    tmp_dir = os.path.join(tempfile.gettempdir(), str(uuid.uuid4()))
-
-    try:
-        result = subprocess.run(
-            ["git", "clone", "--depth", "1", auth_url, tmp_dir],
-            capture_output=True, text=True, timeout=60,
-        )
-    except subprocess.TimeoutExpired:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-        raise RuntimeError("Clone timed out after 60 seconds")
-
-    if result.returncode != 0:
-        raise RuntimeError(f"Clone failed: {result.stderr}")
-
-    return tmp_dir
-
-def delete_repo(tmp_dir: str) -> None:
-    shutil.rmtree(tmp_dir, ignore_errors=True)
-```
-
-`--depth 1` clones only the latest commit. Always delete the temp dir after analysis — use try/finally.
+- Strip `https://`, validate URL starts with `github.com/`, raise `ValueError` otherwise
+- Build auth URL: `https://{token}@{repo_url}`, clone to `tempfile.gettempdir()/{uuid4()}`
+- `git clone --depth 1` with 60s timeout — raise `RuntimeError` on failure (never forward stderr — it contains the token)
+- Always call `delete_repo()` in a `try/finally` after analysis
 
 ---
 
@@ -612,23 +438,9 @@ def delete_repo(tmp_dir: str) -> None:
 
 ```python
 IGNORED_DIRS = {'.git', 'node_modules', '.venv', '__pycache__', 'dist', 'build', '.next', 'coverage'}
-
-def find_service_folders(root: str) -> list[str]:
-    results = []
-    def walk(path):
-        for entry in os.listdir(path):
-            full = os.path.join(path, entry)
-            if not os.path.isdir(full) or entry in IGNORED_DIRS:
-                continue
-            if _is_service_folder(full):
-                results.append(full)
-            else:
-                walk(full)   # recurse — no depth cap
-    walk(root)
-    return results
 ```
 
-No hardcoded depth limit. `IGNORED_DIRS` is what bounds the traversal. Once a folder is identified as a service, its subdirectories are not recursed into — a service folder is a leaf.
+`find_service_folders(root)` walks recursively, skipping `IGNORED_DIRS`. A folder containing any `SERVICE_MARKERS` file (`main.py`, `app.py`, `package.json`, `openapi.yaml`, `openapi.json`) is a service — its subdirectories are not recursed into. No hardcoded depth limit.
 
 ### Endpoint discovery priority
 
@@ -640,22 +452,15 @@ When analyzing a service folder:
 ### tree-sitter — two jobs, Python + JS/TS
 
 **Job 1 — Find what a service EXPOSES (route decorators → endpoints table)**
-
-```python
-# Python:  @app.get("/users/{id}")  → method=GET, path=/users/{id}
-# Express: app.get('/users/:id', ...) → method=GET, path=/users/:id
-# Next.js: /app/api/users/route.js → GET /api/users (filename-based)
-```
+- Python: `@app.get("/users/{id}")` → `method=GET, path=/users/{id}, function_name=get_user`
+- Express: `app.get('/users/:id', handler)` → `method=GET, path=/users/:id`
+- Next.js: `app/users/route.js` exporting `GET` → `method=GET, path=/users`
 
 **Job 2 — Find what a service CALLS (HTTP client calls → consumer_edges)**
+- Python: `requests.get(...)`, `httpx.get(...)` — also captures enclosing function name
+- JS: `fetch(...)`, `axios.get/post/put/delete(...)` — also captures enclosing function name
 
-```python
-# Python: requests.get("http://user-service/users/1")
-# JS:     fetch("http://user-service/users/1")
-# JS:     axios.get("http://user-service/users/1")
-```
-
-The URL matcher operates on the extracted URL string — it works regardless of source language.
+The URL matcher operates on the extracted URL string — works regardless of source language.
 
 ### URL matching
 
@@ -822,39 +627,7 @@ ORDER BY ce.call_count DESC;
 
 ## asyncpg pool setup
 
-```python
-# database.py
-import asyncpg, os
-from dotenv import load_dotenv
-
-load_dotenv()
-_pool = None
-
-async def get_pool() -> asyncpg.Pool:
-    global _pool
-    if _pool is None:
-        _pool = await asyncpg.create_pool(
-            os.getenv("DATABASE_URL"),
-            min_size=2,
-            max_size=10,
-            statement_cache_size=0,   # required for Supabase PgBouncer
-        )
-    return _pool
-
-# main.py
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from database import get_pool
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    await get_pool()
-    yield
-
-app = FastAPI(lifespan=lifespan)
-```
-
-`statement_cache_size=0` is required — Supabase uses PgBouncer in transaction mode which does not support prepared statements.
+`database.py` creates a single global `asyncpg.Pool` (min=2, max=10). **`statement_cache_size=0` is required** — Supabase uses PgBouncer in transaction mode which does not support prepared statements. The pool is initialised in `main.py`'s lifespan and reused on every request via `await get_pool()`.
 
 ---
 
@@ -882,63 +655,21 @@ No `tailwind.config.js`. No `content` array. No `@tailwind` directives.
 
 ### React Flow in Next.js 16
 
-```jsx
-// components/DependencyGraph.jsx
-'use client'
-import { ReactFlow, Background, Controls, MiniMap } from '@xyflow/react'
-import '@xyflow/react/dist/style.css'
-
-export default function DependencyGraph({ nodes, edges, onNodeClick }) {
-  return (
-    <div style={{ width: '100%', height: '100vh' }}>
-      <ReactFlow nodes={nodes} edges={edges} onNodeClick={onNodeClick} fitView>
-        <Background />
-        <Controls />
-        <MiniMap />
-      </ReactFlow>
-    </div>
-  )
-}
-```
+Dynamic import with `ssr: false` is required — React Flow uses `window`/`document`:
 
 ```jsx
-// app/graph/page.js — dynamic import REQUIRED
-import dynamic from 'next/dynamic'
-
+// app/graph/page.js
 const DependencyGraph = dynamic(
   () => import('@/components/DependencyGraph'),
-  { ssr: false }   // React Flow uses window/document — no SSR
+  { ssr: false }
 )
 ```
 
+`DependencyGraph.jsx` renders `<ReactFlow nodes={nodes} edges={edges} onNodeClick={onNodeClick} fitView>` with `<Background />`, `<Controls />`, `<MiniMap />`.
+
 ### Graph page reads repo from URL, fetches on mount
 
-```javascript
-// app/graph/page.js
-'use client'
-import { useSearchParams } from 'next/navigation'
-import { useEffect, useState } from 'react'
-import { fetchGraph } from '@/lib/api'
-
-export default function GraphPage() {
-  const searchParams = useSearchParams()
-  const repoId = searchParams.get('repo')  // e.g. "iamaryan07/sample-services"
-  const [nodes, setNodes] = useState([])
-  const [edges, setEdges] = useState([])
-
-  useEffect(() => {
-    if (!repoId) return
-    fetchGraph(repoId).then(/* build rfNodes + rfEdges, call setNodes/setEdges */)
-  }, [repoId])
-  // ...
-}
-```
-
-Graph persists on refresh because `repoId` comes from the URL, not component state.
-
-### All API calls live in lib/api.js
-
-No inline `fetch()` inside components or pages. Every call to FastAPI goes through `lib/api.js`.
+`app/graph/page.js` reads `repoId` from `useSearchParams().get('repo')` and calls `fetchGraph(repoId)` in a `useEffect`. Graph persists on refresh because `repoId` comes from the URL, not component state.
 
 ---
 
