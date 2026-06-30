@@ -9,7 +9,7 @@ test('input_displayed_value_is_driven_by_value_prop_not_by_typing', () => {
   // change event fires.
   const onChange = jest.fn() // intentionally does NOT feed value back
   render(<SearchBar value="abc" onChange={onChange} />)
-  const input = screen.getByPlaceholderText('Search endpoints…')
+  const input = screen.getByPlaceholderText('Filter endpoints…')
   fireEvent.change(input, { target: { value: 'abcd' } })
   // onChange was called but the prop was NOT re-rendered → still "abc"
   expect(input.value).toBe('abc')
@@ -17,7 +17,7 @@ test('input_displayed_value_is_driven_by_value_prop_not_by_typing', () => {
 
 test('input_displayed_value_updates_when_value_prop_changes', () => {
   const { rerender } = render(<SearchBar value="abc" onChange={jest.fn()} />)
-  const input = screen.getByPlaceholderText('Search endpoints…')
+  const input = screen.getByPlaceholderText('Filter endpoints…')
   expect(input.value).toBe('abc')
   rerender(<SearchBar value="xyz" onChange={jest.fn()} />)
   expect(input.value).toBe('xyz')
@@ -25,7 +25,7 @@ test('input_displayed_value_updates_when_value_prop_changes', () => {
 
 test('input_shows_empty_string_when_value_prop_is_empty_string', () => {
   render(<SearchBar value="" onChange={jest.fn()} />)
-  const input = screen.getByPlaceholderText('Search endpoints…')
+  const input = screen.getByPlaceholderText('Filter endpoints…')
   expect(input.value).toBe('')
 })
 
@@ -36,7 +36,7 @@ test('onChange_receives_the_complete_string_from_event_target_value', () => {
   // pass the full string "use", not just the new character.
   const onChange = jest.fn()
   render(<SearchBar value="us" onChange={onChange} />)
-  const input = screen.getByPlaceholderText('Search endpoints…')
+  const input = screen.getByPlaceholderText('Filter endpoints…')
   fireEvent.change(input, { target: { value: 'use' } })
   expect(onChange).toHaveBeenCalledWith('use')
 })
@@ -44,7 +44,7 @@ test('onChange_receives_the_complete_string_from_event_target_value', () => {
 test('onChange_called_exactly_once_per_change_event', () => {
   const onChange = jest.fn()
   render(<SearchBar value="" onChange={onChange} />)
-  fireEvent.change(screen.getByPlaceholderText('Search endpoints…'), {
+  fireEvent.change(screen.getByPlaceholderText('Filter endpoints…'), {
     target: { value: 'a' },
   })
   expect(onChange).toHaveBeenCalledTimes(1)
@@ -53,7 +53,7 @@ test('onChange_called_exactly_once_per_change_event', () => {
 test('successive_change_events_produce_correct_consecutive_onChange_calls', () => {
   const onChange = jest.fn()
   render(<SearchBar value="" onChange={onChange} />)
-  const input = screen.getByPlaceholderText('Search endpoints…')
+  const input = screen.getByPlaceholderText('Filter endpoints…')
   fireEvent.change(input, { target: { value: 'g' } })
   fireEvent.change(input, { target: { value: 'ge' } })
   fireEvent.change(input, { target: { value: 'get' } })
